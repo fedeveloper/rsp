@@ -1,0 +1,6 @@
+{
+  "name": "@acme/a",
+  "dependencies": {
+    "lodash": "^4.17.21"
+  }
+}

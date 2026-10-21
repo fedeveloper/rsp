@@ -1,0 +1,4 @@
+[
+  {"ruleId": "checks/disabled", "path": "src/load.test.js", "message": "Test file deleted", "evidence": "deleted: src/load.test.js"},
+  {"ruleId": "checks/disabled", "path": "test/api.js", "message": "Test file deleted", "evidence": "deleted: test/api.js"}
+]

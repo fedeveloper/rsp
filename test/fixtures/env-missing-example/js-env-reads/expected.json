@@ -1,0 +1,7 @@
+[
+  {"ruleId": "env/missing-example", "path": "server.js", "line": 2, "message": "Reads environment variable `API_KEY`, missing from .env.example", "evidence": "const key = process.env.API_KEY;"},
+  {"ruleId": "env/missing-example", "path": "server.js", "line": 3, "message": "Reads environment variable `DATABASE_URL`, missing from .env.example", "evidence": "const db = process.env['DATABASE_URL'];"},
+  {"ruleId": "env/missing-example", "path": "server.js", "line": 4, "message": "Reads environment variable `LOG_LEVEL`, missing from .env.example", "evidence": "const { SESSION_SECRET, LOG_LEVEL = 'info' } = process.env;"},
+  {"ruleId": "env/missing-example", "path": "server.js", "line": 4, "message": "Reads environment variable `SESSION_SECRET`, missing from .env.example", "evidence": "const { SESSION_SECRET, LOG_LEVEL = 'info' } = process.env;"},
+  {"ruleId": "env/missing-example", "path": "src/api.js", "line": 1, "message": "Reads environment variable `VITE_API_URL`, missing from .env.example", "evidence": "export const url = import.meta.env.VITE_API_URL;"}
+]

@@ -12,5 +12,6 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src", "test", "eval", "scripts"]
+  "include": ["src", "test", "eval", "scripts"],
+  "exclude": ["test/fixtures", "eval/project", "eval/.cache"]
 }

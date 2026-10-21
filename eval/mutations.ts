@@ -11,12 +11,12 @@ export interface Mutation {
   apply(files: Files): void;
 }
 
-const CD = "checks/disabled";
-const DEP = "deps/undeclared";
-const ENV = "env/missing-example";
+export const CD = "checks/disabled";
+export const DEP = "deps/undeclared";
+export const ENV = "env/missing-example";
 
 /** Replaces exactly one occurrence, so a mutation fails loudly if the project drifts. */
-function replace(files: Files, path: string, from: string, to: string): void {
+export function replace(files: Files, path: string, from: string, to: string): void {
   const text = files.get(path);
   if (text === undefined) throw new Error(`${path} not in project`);
   const at = text.indexOf(from);
@@ -24,10 +24,10 @@ function replace(files: Files, path: string, from: string, to: string): void {
   files.set(path, text.slice(0, at) + to + text.slice(at + from.length));
 }
 
-const risky = (id: string, expect: string[], description: string, apply: (f: Files) => void): Mutation => ({
+export const risky = (id: string, expect: string[], description: string, apply: (f: Files) => void): Mutation => ({
   id, kind: "risky", description, expect, apply,
 });
-const benign = (id: string, description: string, apply: (f: Files) => void): Mutation => ({
+export const benign = (id: string, description: string, apply: (f: Files) => void): Mutation => ({
   id, kind: "benign", description, expect: [], apply,
 });
 

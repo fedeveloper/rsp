@@ -1,0 +1,5 @@
+[
+  {"ruleId": "checks/disabled", "path": "package.json", "message": "Removed package.json script `lint`, which ran `eslint`", "evidence": "\"lint\": \"eslint .\""},
+  {"ruleId": "checks/disabled", "path": "package.json", "line": 5, "message": "Added `|| true` after a command", "evidence": "\"test\": \"vitest run || true\","},
+  {"ruleId": "checks/disabled", "path": "package.json", "line": 6, "message": "package.json script `typecheck` no longer runs `tsc`", "evidence": "\"typecheck\": \"echo skipped\","}
+]

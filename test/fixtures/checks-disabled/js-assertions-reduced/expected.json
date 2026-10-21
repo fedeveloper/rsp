@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "src/load.test.ts", "message": "Assertions in test file went from 2 to 1", "evidence": "assertions: 2 -> 1"}
+]
