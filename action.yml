@@ -1,8 +1,8 @@
-name: rsp
-description: Reports reproducible facts about risky changes in a pull request diff, without reviewing it with a model.
+name: "RSP: Reproducible Shortcut Patrol"
+description: Reports reproducible facts about shortcuts in pull requests, such as skipped tests, suppressions and undeclared deps.
 author: fedeveloper
 branding:
-  icon: check-circle
+  icon: shield
   color: blue
 
 inputs:

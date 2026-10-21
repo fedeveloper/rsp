@@ -1,6 +1,7 @@
 import type { DiffContext, DiffLine, FileChange, RawFinding, Rule } from "../types.js";
 import { blankStrings, JS_FILE, nonCodeLines } from "./js.js";
 import * as python from "./python.js";
+import { codeSpan } from "../text.js";
 
 interface Pattern {
   /** What a project lists under `allow` in .rsp.toml to accept these findings. */
@@ -183,13 +184,13 @@ function packageJsonFile(ctx: DiffContext, file: FileChange): RawFinding[] {
       now === undefined
         ? {
             key: "script-check-removed",
-            message: `Removed package.json script \`${name}\`, which ran ${lost.map((c) => `\`${c}\``).join(", ")}`,
+            message: `Removed package.json script ${codeSpan(name)}, which ran ${lost.map((c) => codeSpan(c)).join(", ")}`,
             locations: [{ path: file.path }],
             evidence: `"${name}": ${JSON.stringify(command)}`,
           }
         : {
             key: "script-check-removed",
-            message: `package.json script \`${name}\` no longer runs ${lost.map((c) => `\`${c}\``).join(", ")}`,
+            message: `package.json script ${codeSpan(name)} no longer runs ${lost.map((c) => codeSpan(c)).join(", ")}`,
             locations: [{ path: file.path, line: index >= 0 ? index + 1 : undefined }],
             evidence: index >= 0 ? lines[index]!.trim() : `"${name}": ${JSON.stringify(now)}`,
           },

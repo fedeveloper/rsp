@@ -1,6 +1,7 @@
 import type { DiffContext, RawFinding, Rule } from "../types.js";
 import { JS_FILE } from "./js.js";
 import { describeChange, jsSignatures, pythonSignatures, type Signature } from "./signatures.js";
+import { codeSpan } from "../text.js";
 
 const PYTHON_TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/;
 const JS_TEST_FILE = /(^|\/)(__tests__|tests?|e2e|spec)\/.*\.[cm]?[jt]sx?$|\.(test|spec|test-d)\.[cm]?[jt]sx?$/;
@@ -40,7 +41,7 @@ export const interfaceUntested: Rule = {
         if (changedTests.some((t) => word.test(t))) continue;
         findings.push({
           key: sig.name,
-          message: `Parameters of \`${sig.name}\`: ${describeChange(old.params, sig.params, !file.path.endsWith(".py"))}; no test changed by the diff mentions it`,
+          message: `Parameters of ${codeSpan(sig.name)}: ${describeChange(old.params, sig.params, !file.path.endsWith(".py"))}; no test changed by the diff mentions it`,
           locations: [{ path: file.path, line: sig.line }],
           evidence: (ctx.readHead(file.path) ?? "").split("\n")[sig.line - 1]!.trim(),
         });

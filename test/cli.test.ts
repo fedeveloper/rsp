@@ -25,7 +25,7 @@ it("prints a markdown report and exits 0 even with findings", () => {
   try {
     const res = rsp(["check", "--repo", repo.dir, "--base", repo.base, "--head", repo.head]);
     assert.equal(res.status, 0, res.stderr);
-    assert.match(res.stdout, /^### rsp · 1 fact on [0-9a-f]{12}\.\.[0-9a-f]{12}/);
+    assert.match(res.stdout, /^### RSP · 1 fact on [0-9a-f]{12}\.\.[0-9a-f]{12}/);
     assert.match(res.stdout, /\| checks\/disabled \| `tests\/test_auth.py:6` \| Added pytest skip marker \|/);
   } finally {
     repo.cleanup();

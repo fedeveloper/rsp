@@ -8,6 +8,7 @@ import { COMMENT_MARKER, runAction } from "../src/action.js";
 import { type FixtureRepo, makeFixtureRepo, makeRepoFromTrees } from "./helpers.js";
 
 const FIXTURES = join(import.meta.dirname, "fixtures");
+const BOT = { type: "Bot" };
 
 interface Call {
   method: string;
@@ -16,7 +17,7 @@ interface Call {
 }
 
 /** Fake GitHub API: serves `comments` on the list call and records every request. */
-function fakeApi(comments: { id: number; body: string }[], failWrites = false) {
+function fakeApi(comments: { id: number; body: string; user?: { type: string } }[], failWrites = false) {
   const calls: Call[] = [];
   const fetchImpl = async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -66,7 +67,7 @@ it("creates the comment, summary and outputs when there are findings", async () 
     const body = api.calls[1]!.body!.body;
     assert.ok(body.startsWith(COMMENT_MARKER));
     assert.match(body, /Added pytest skip marker/);
-    assert.match(s.read("summary.md"), /### rsp · 1 fact/);
+    assert.match(s.read("summary.md"), /### RSP · 1 fact/);
     assert.match(s.read("output.txt"), /^findings=1\nreport=.*rsp-report\.json\n$/);
     assert.equal(JSON.parse(s.read("rsp-report.json")).findings.length, 1);
   } finally {
@@ -77,7 +78,11 @@ it("creates the comment, summary and outputs when there are findings", async () 
 it("updates its existing comment instead of adding another", async () => {
   const s = setup("checks-disabled/skip-marker-added");
   try {
-    const api = fakeApi([{ id: 1, body: "unrelated" }, { id: 42, body: `${COMMENT_MARKER}\nold report` }]);
+    const api = fakeApi([
+      { id: 1, body: "unrelated", user: BOT },
+      { id: 7, body: `${COMMENT_MARKER}\npasted by a person`, user: { type: "User" } },
+      { id: 42, body: `${COMMENT_MARKER}\nold report`, user: BOT },
+    ]);
     assert.equal(await runAction(s.env, api.fetchImpl), 0);
     assert.equal(api.calls[1]!.method, "PATCH");
     assert.equal(api.calls[1]!.url, "https://api.test/repos/acme/shop/issues/comments/42");
@@ -101,7 +106,7 @@ it("posts nothing when there are no findings and no earlier comment", async () =
 it("clears an earlier comment once the findings are gone", async () => {
   const s = setup("checks-disabled/non-python-ignored");
   try {
-    const api = fakeApi([{ id: 42, body: `${COMMENT_MARKER}\nold report` }]);
+    const api = fakeApi([{ id: 42, body: `${COMMENT_MARKER}\nold report`, user: BOT }]);
     assert.equal(await runAction(s.env, api.fetchImpl), 0);
     assert.equal(api.calls[1]!.method, "PATCH");
     assert.match(api.calls[1]!.body!.body, /None of the 5 rules found facts in this diff/);
@@ -240,6 +245,37 @@ it("rejects a test-retries value that is not a number", async () => {
     assert.equal(result, 1);
     assert.match(logs, /test-retries/);
   } finally {
+    s.cleanup();
+  }
+});
+
+it("refuses to run the tests of a pull request on pull_request_target", async () => {
+  const s = setup("checks-disabled/skip-marker-added", { "test-command": "true" });
+  try {
+    const { result, logs } = await quietly(() => runAction({ ...s.env, GITHUB_EVENT_NAME: "pull_request_target" }, fakeApi([]).fetchImpl));
+    assert.equal(result, 1);
+    assert.match(logs, /refused on pull_request_target/);
+  } finally {
+    s.cleanup();
+  }
+});
+
+it("runs the tests without the token, Actions runtime tokens or step files, and with workflow commands stopped", async () => {
+  const repo = makeRepoFromTrees(new Map([["state.txt", "ok\n"]]), new Map([["state.txt", "ok\n"]]));
+  const seen = join(mkdtempSync(join(tmpdir(), "rsp-env-")), "env.txt");
+  const s = setup(repo, { "test-command": `env > ${seen}; echo '<testsuite/>' > junit.xml` });
+  const outer = { ...process.env };
+  Object.assign(process.env, { ACTIONS_RUNTIME_TOKEN: "rt", GITHUB_ENV: "/tmp/env", "INPUT_GITHUB-TOKEN": "t0ken" });
+  try {
+    const { result, logs } = await quietly(() => runAction(s.env, fakeApi([]).fetchImpl));
+    assert.equal(result, 0);
+    const env = readFileSync(seen, "utf8");
+    assert.doesNotMatch(env, /t0ken|ACTIONS_RUNTIME_TOKEN|^GITHUB_ENV=/m);
+    const stop = /::stop-commands::([0-9a-f]{32})/.exec(logs);
+    assert.ok(stop, logs);
+    assert.ok(logs.includes(`::${stop[1]}::`));
+  } finally {
+    process.env = outer;
     s.cleanup();
   }
 });

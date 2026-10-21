@@ -1,4 +1,5 @@
 import type { RawFinding, Rule } from "../types.js";
+import { codeSpan } from "../text.js";
 
 export const testsDelta: Rule = {
   id: "tests/delta",
@@ -26,9 +27,9 @@ export const testsDelta: Rule = {
     for (const [id, now] of head.results) {
       const before = base.results.get(id);
       if (before === "passed" && now === "failed") {
-        findings.push(finding(id, `Test \`${id}\` fails at head and passed at base`, `${id}: passed -> failed`));
+        findings.push(finding(id, `Test ${codeSpan(id)} fails at head and passed at base`, `${id}: passed -> failed`));
       } else if (before !== undefined && before !== "skipped" && now === "skipped") {
-        findings.push(finding(id, `Test \`${id}\` is skipped at head and ran at base`, `${id}: ${before} -> skipped`));
+        findings.push(finding(id, `Test ${codeSpan(id)} is skipped at head and ran at base`, `${id}: ${before} -> skipped`));
       }
     }
     // Renamed or moved tests leave the total unchanged; only a smaller suite has lost tests.
@@ -38,7 +39,7 @@ export const testsDelta: Rule = {
         findings.push(
           finding(
             id,
-            `Test \`${id}\` ran at base and is missing at head (${base.results.size} tests at base, ${head.results.size} at head)`,
+            `Test ${codeSpan(id)} ran at base and is missing at head (${base.results.size} tests at base, ${head.results.size} at head)`,
             `${id}: ${before} -> missing`,
           ),
         );

@@ -2,6 +2,7 @@
 // to what callers depend on: parameter names, order, optionality and defaults.
 // Type annotations are left out, so adding type hints is not an interface change.
 import { stringLines } from "./python.js";
+import { codeSpan } from "../text.js";
 
 export interface Signature {
   /** `name`, or `Class.name` for a method. */
@@ -110,7 +111,7 @@ function mergeOverloads(sigs: Signature[]): Signature[] {
  * parameters, changed defaults, or a changed order.
  */
 export function describeChange(before: string[], after: string[], positional = false): string {
-  if (before.includes("|") || after.includes("|")) return `went from \`${overloads(before)}\` to \`${overloads(after)}\``;
+  if (before.includes("|") || after.includes("|")) return `went from ${codeSpan(overloads(before))} to ${codeSpan(overloads(after))}`;
   if (positional) return describePositional(before, after);
   const name = (p: string) => p.split("=")[0]!.replace(/\?$/, "");
   const old = new Map(before.map((p) => [name(p), p]));
@@ -119,9 +120,9 @@ export function describeChange(before: string[], after: string[], positional = f
   const added = after.filter((p) => !old.has(name(p)));
   const removed = before.filter((p) => !now.has(name(p)));
   const changed = after.filter((p) => old.has(name(p)) && old.get(name(p)) !== p);
-  if (added.length) parts.push(`added ${added.map((p) => `\`${p}\``).join(", ")}`);
-  if (removed.length) parts.push(`removed ${removed.map((p) => `\`${p}\``).join(", ")}`);
-  if (changed.length) parts.push(`changed ${changed.map((p) => `\`${old.get(name(p))}\` to \`${p}\``).join(", ")}`);
+  if (added.length) parts.push(`added ${added.map((p) => codeSpan(p)).join(", ")}`);
+  if (removed.length) parts.push(`removed ${removed.map((p) => codeSpan(p)).join(", ")}`);
+  if (changed.length) parts.push(`changed ${changed.map((p) => `${codeSpan(old.get(name(p))!)} to ${codeSpan(p)}`).join(", ")}`);
   if (parts.length === 0) parts.push(`changed order from \`(${before.join(", ")})\` to \`(${after.join(", ")})\``);
   return parts.join("; ");
 }
@@ -256,10 +257,10 @@ function describePositional(before: string[], after: string[]): string {
   const parts: string[] = [];
   const changed: string[] = [];
   for (let i = 0; i < Math.min(before.length, after.length); i++) {
-    if (shape(before[i]!) !== shape(after[i]!)) changed.push(`\`${before[i]}\` to \`${after[i]}\``);
+    if (shape(before[i]!) !== shape(after[i]!)) changed.push(`${codeSpan(before[i]!)} to ${codeSpan(after[i]!)}`);
   }
-  if (after.length > before.length) parts.push(`added ${after.slice(before.length).map((p) => `\`${p}\``).join(", ")}`);
-  if (before.length > after.length) parts.push(`removed ${before.slice(after.length).map((p) => `\`${p}\``).join(", ")}`);
+  if (after.length > before.length) parts.push(`added ${after.slice(before.length).map((p) => codeSpan(p)).join(", ")}`);
+  if (before.length > after.length) parts.push(`removed ${before.slice(after.length).map((p) => codeSpan(p)).join(", ")}`);
   if (changed.length) parts.push(`changed ${changed.join(", ")}`);
   return parts.join("; ");
 }

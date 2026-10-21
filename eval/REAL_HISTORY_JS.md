@@ -6,7 +6,6 @@ To reproduce, clone each repository with `git clone --depth 400 <url>`, check ou
 
 | Repository | Head commit | Commits checked | Commits with findings | `checks/disabled` | `deps/undeclared` | `env/missing-example` | `interface/untested-change` | `tests/delta` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| [mtgo-collection-tracker](https://github.com/fedeveloper/mtgo-collection-tracker) | `a70a02cae51e` | 19 | 0 | 0 | 0 | 0 | 0 | 0 |
 | [express](https://github.com/expressjs/express) | `0dee2c52c7c8` | 100 | 2 | 3 | 0 | 0 | 0 | 0 |
 | [axios](https://github.com/axios/axios) | `fceeb10997ea` | 100 | 1 | 14 | 0 | 0 | 0 | 0 |
 | [fastify](https://github.com/fastify/fastify) | `5d4c23352d90` | 100 | 2 | 4 | 0 | 0 | 0 | 0 |
