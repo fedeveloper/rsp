@@ -4,20 +4,22 @@
 //
 // Corpora: the sample Python project in eval/project (eval/RESULTS.md) and a
 // real JavaScript application cloned at a pinned commit (eval/RESULTS-mtgo.md).
-// A third corpus, the maintainer's private Python game rogue
-// (eval/RESULTS-rogue.md), runs only when RSP_EVAL_ROGUE=1, because CI cannot
-// clone it.
+// RSP_EVAL_EXTRA=<file> adds a corpus kept outside this repository, such as
+// one built on private code: the file's default export receives the mutation
+// helpers and returns { repo, commit, describe, mutations }, and the results
+// are written next to it as RESULTS.md.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { check } from "../src/index.js";
 import { ALL_RULES } from "../src/rules/index.js";
 import type { Finding } from "../src/types.js";
 import { VERSION } from "../src/version.js";
 import { makeRepoFromTrees } from "../test/helpers.js";
+import * as helpers from "./mutations.js";
 import { type Files, MUTATIONS, type Mutation } from "./mutations.js";
 import { MTGO_COMMIT, MTGO_MUTATIONS, MTGO_REPO } from "./mutations-mtgo.js";
-import { ROGUE_COMMIT, ROGUE_MUTATIONS, ROGUE_REPO } from "./mutations-rogue.js";
 
 interface Corpus {
   /** What the mutations are applied to, as a sentence fragment for the report. */
@@ -158,15 +160,20 @@ const corpora: Corpus[] = [
     results: join(import.meta.dirname, "RESULTS-mtgo.md"),
   },
 ];
-if (process.env.RSP_EVAL_ROGUE === "1") {
+if (process.env.RSP_EVAL_EXTRA) {
+  const file = resolve(process.env.RSP_EVAL_EXTRA);
+  const extra = (await import(pathToFileURL(file).href)).default(helpers) as {
+    repo: string;
+    commit: string;
+    describe: string;
+    mutations: Mutation[];
+  };
   corpora.push({
-    describe:
-      `[rogue](${ROGUE_REPO}) at commit \`${ROGUE_COMMIT.slice(0, 12)}\`, a real terminal game in plain Python with ` +
-      "no dependency manifest, tests or CI, cloned at run time",
-    source: "eval/mutations-rogue.ts",
-    files: readRepo(ROGUE_REPO, ROGUE_COMMIT),
-    mutations: ROGUE_MUTATIONS,
-    results: join(import.meta.dirname, "RESULTS-rogue.md"),
+    describe: `${extra.describe} at commit \`${extra.commit.slice(0, 12)}\`, cloned at run time`,
+    source: relative(process.cwd(), file),
+    files: readRepo(extra.repo, extra.commit),
+    mutations: extra.mutations,
+    results: join(dirname(file), "RESULTS.md"),
   });
 }
 
