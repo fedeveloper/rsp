@@ -2,7 +2,7 @@
 // (Node, Express, React, Vite), at a pinned commit. The risky ones are the kind
 // of change a coding assistant makes to get something working; the benign ones
 // are ordinary work on the same code.
-import { benign, CD, DEP, ENV, type Files, type Mutation, replace, risky } from "./mutations.js";
+import { benign, CD, DEP, ENV, type Files, IF, type Mutation, replace, risky } from "./mutations.js";
 
 export const MTGO_REPO = "https://github.com/fedeveloper/MTGO-Collection-Tracker";
 export const MTGO_COMMIT = "a70a02cae51ebd50eed5faf162e941e002987997";
@@ -67,6 +67,18 @@ export const MTGO_MUTATIONS: Mutation[] = [
   risky("dep-and-env", [DEP, ENV], "Limit Scryfall concurrency with p-limit and SCRYFALL_CONCURRENCY", (f) =>
     replace(f, "services/priceFetcher.js", "import zlib from 'zlib';\n", "import zlib from 'zlib';\nimport pLimit from 'p-limit';\n\nconst limit = pLimit(Number(process.env.SCRYFALL_CONCURRENCY || 5));\n")),
 
+  risky("param-added-beside-new-tests", [IF], "Add a first test suite and change the parameters of a function it does not cover", (f) => {
+    addDependency(f, "devDependencies", "vitest", "^3.2.4");
+    f.set("test/dekParser.test.js", VITEST_SUITE("describe('parseDekContent', () => {\n  it('returns no cards for an empty deck', () => {\n    expect(parseDekContent('<Deck></Deck>')).toEqual([]);\n  });\n});\n"));
+    replace(f, "services/dekParser.js", "export function parseDekFile(filePath) {", "export function parseDekFile(filePath, encoding = 'utf-8') {");
+  }),
+  benign("param-added-no-tests", "Add a parameter to an exported function in an app without tests", (f) =>
+    replace(f, "services/dekParser.js", "export function parseDekFile(filePath) {", "export function parseDekFile(filePath, encoding = 'utf-8') {")),
+  benign("param-added-tested", "Add a parameter to an exported function and a test suite that calls it", (f) => {
+    addDependency(f, "devDependencies", "vitest", "^3.2.4");
+    f.set("test/dekParser.test.js", VITEST_SUITE("describe('parseDekContent', () => {\n  it('returns no cards for an empty deck', () => {\n    expect(parseDekContent('<Deck></Deck>')).toEqual([]);\n  });\n});\n"));
+    replace(f, "services/dekParser.js", "export function parseDekContent(xmlContent) {", "export function parseDekContent(xmlContent, options = {}) {");
+  }),
   benign("dep-declared", "Add node-cron to package.json and import it", (f) => {
     addDependency(f, "dependencies", "node-cron", "^4.2.1");
     replace(f, "server.js", "import fs from 'fs';\n", "import fs from 'fs';\nimport cron from 'node-cron';\n");
