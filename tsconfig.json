@@ -10,7 +10,8 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": false,
     "outDir": "dist",
-    "rootDir": "."
+    "rootDir": ".",
+    "types": ["node"]
   },
   "include": ["src", "test", "eval", "scripts"],
   "exclude": ["test/fixtures", "eval/project", "eval/.cache"]
