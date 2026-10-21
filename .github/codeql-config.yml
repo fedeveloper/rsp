@@ -1,0 +1,5 @@
+name: rsp CodeQL config
+
+# action-dist/ is the esbuild bundle of src/, which is analysed directly.
+paths-ignore:
+  - action-dist

@@ -1,6 +1,7 @@
 import type { RawFinding, Rule } from "../types.js";
 import * as js from "./js.js";
 import * as python from "./python.js";
+import { codeSpan } from "../text.js";
 
 const EXAMPLE_FILE = /(^|\/)(\.env(\.[\w-]+)*[._-](example|sample|template|dist|defaults)|env\.example|example\.env|sample\.env)$/i;
 const EXAMPLE_KEY = /^\s*#?\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
@@ -54,7 +55,7 @@ export const envMissingExample: Rule = {
           if (documented.has(name) || removedReads.has(name) || isStandard(name)) continue;
           findings.push({
             key: name,
-            message: `Reads environment variable \`${name}\`, missing from ${where}`,
+            message: `Reads environment variable ${codeSpan(name)}, missing from ${where}`,
             locations: [{ path: file.path, line: l.newLine }],
             evidence: l.text.trim(),
           });

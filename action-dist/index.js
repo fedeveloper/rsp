@@ -1,4 +1,5 @@
 // src/action.ts
+import { execFileSync as execFileSync2 } from "node:child_process";
 import { appendFileSync, readFileSync as readFileSync3, writeFileSync } from "node:fs";
 import { join as join2 } from "node:path";
 
@@ -1032,7 +1033,7 @@ function buildContext(repoDir, baseRef, headRef, exclude = []) {
 import { createHash } from "node:crypto";
 
 // src/version.ts
-var VERSION = "0.3.0";
+var VERSION = "0.4.0";
 
 // src/engine.ts
 function runRules(ctx, rules, options = [], config) {
@@ -1139,9 +1140,9 @@ function importedSpecifiers(line) {
     const m = re.exec(line);
     if (m) specs.push(m[1]);
   }
-  const code2 = blankStrings(line);
+  const code = blankStrings(line);
   for (const m of line.matchAll(REQUIRE)) {
-    if (code2.startsWith("require(", m.index)) specs.push(m[1]);
+    if (code.startsWith("require(", m.index)) specs.push(m[1]);
   }
   return specs;
 }
@@ -1173,11 +1174,11 @@ var ENV_DESTRUCTURE = /\{([^{}]*)\}\s*=\s*(?:process\.env|import\.meta\.env|Bun\
 var VITE_BUILTINS = /* @__PURE__ */ new Set(["MODE", "BASE_URL", "PROD", "DEV", "SSR"]);
 function envVarReads(line) {
   if (isCommentLine(line)) return [];
-  const code2 = line.replace(/\/\/.*$/, "");
-  const blank = blankStrings(code2);
+  const code = line.replace(/\/\/.*$/, "");
+  const blank = blankStrings(code);
   const names = [];
   for (const re of ENV_READS) {
-    for (const m of code2.matchAll(re)) {
+    for (const m of code.matchAll(re)) {
       if (blank.startsWith(m[0].slice(0, 4), m.index)) names.push(m[1]);
     }
   }
@@ -1188,7 +1189,7 @@ function envVarReads(line) {
       if (name) names.push(name);
     }
   }
-  return code2.includes("import.meta.env") ? names.filter((n) => !VITE_BUILTINS.has(n)) : names;
+  return code.includes("import.meta.env") ? names.filter((n) => !VITE_BUILTINS.has(n)) : names;
 }
 function nonCodeLines(text) {
   const result = /* @__PURE__ */ new Set();
@@ -1331,10 +1332,10 @@ function indentation(line) {
 var IMPORT = /^\s*import\s+(.+)$/;
 var FROM_IMPORT = /^\s*from\s+([\w.]+)\s+import\b/;
 function importedModules(line) {
-  const code2 = stripComment(line);
-  const from = FROM_IMPORT.exec(code2);
+  const code = stripComment(line);
+  const from = FROM_IMPORT.exec(code);
   if (from) return from[1].startsWith(".") ? [] : [from[1].split(".")[0]];
-  const imp = IMPORT.exec(code2);
+  const imp = IMPORT.exec(code);
   if (!imp) return [];
   return imp[1].replace(/[()\\]/g, "").split(",").map((part) => part.trim().split(/\s+/)[0].split(".")[0]).filter((name) => /^[A-Za-z_]\w*$/.test(name));
 }
@@ -1381,10 +1382,10 @@ var ENV_READS2 = [
   /\b(?:os\.)?environ\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\](?!\s*=[^=])/g
 ];
 function envVarReads2(line) {
-  const code2 = stripComment(line);
+  const code = stripComment(line);
   const names = [];
   for (const re of ENV_READS2) {
-    for (const m of code2.matchAll(re)) names.push(m[1]);
+    for (const m of code.matchAll(re)) names.push(m[1]);
   }
   return names;
 }
@@ -1459,6 +1460,15 @@ function blankStrings2(line) {
     } else out += c;
   }
   return out;
+}
+
+// src/text.ts
+function codeSpan(s) {
+  const text = s.replace(/[\r\n]+/g, " ");
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
+  const fence = "`".repeat(longest + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") || text.startsWith(" ") && text.endsWith(" ") && text.trim() ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
 }
 
 // src/rules/checks-disabled.ts
@@ -1621,12 +1631,12 @@ function packageJsonFile(ctx, file) {
     findings.push(
       now === void 0 ? {
         key: "script-check-removed",
-        message: `Removed package.json script \`${name}\`, which ran ${lost.map((c) => `\`${c}\``).join(", ")}`,
+        message: `Removed package.json script ${codeSpan(name)}, which ran ${lost.map((c) => codeSpan(c)).join(", ")}`,
         locations: [{ path: file.path }],
         evidence: `"${name}": ${JSON.stringify(command)}`
       } : {
         key: "script-check-removed",
-        message: `package.json script \`${name}\` no longer runs ${lost.map((c) => `\`${c}\``).join(", ")}`,
+        message: `package.json script ${codeSpan(name)} no longer runs ${lost.map((c) => codeSpan(c)).join(", ")}`,
         locations: [{ path: file.path, line: index >= 0 ? index + 1 : void 0 }],
         evidence: index >= 0 ? lines[index].trim() : `"${name}": ${JSON.stringify(now)}`
       }
@@ -1695,12 +1705,12 @@ function testConfigFile(ctx, file) {
   }
   return findings;
 }
-function matchAdded(file, patterns, removed = multiset([file], "del"), code2 = (l) => l.text) {
+function matchAdded(file, patterns, removed = multiset([file], "del"), code = (l) => l.text) {
   const findings = [];
   for (const l of file.lines) {
     if (l.kind !== "add" || take(removed, l.text.trim())) continue;
     for (const p of patterns) {
-      if (p.regex.test(code2(l))) {
+      if (p.regex.test(code(l))) {
         findings.push({
           key: p.id,
           message: `Added ${p.label}`,
@@ -2348,7 +2358,7 @@ function python(ctx) {
         if (candidates(mod).some((c) => declared.names.has(c))) continue;
         findings.push({
           key: mod,
-          message: `Imports \`${mod}\`, not declared in ${where2}`,
+          message: `Imports ${codeSpan(mod)}, not declared in ${where2}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim()
         });
@@ -2380,7 +2390,7 @@ function javascript(ctx) {
         if (isInTryBlock(lines, l.newLine - 1)) continue;
         findings.push({
           key: name,
-          message: `Imports \`${name}\`, not declared in ${where2}`,
+          message: `Imports ${codeSpan(name)}, not declared in ${where2}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim()
         });
@@ -2476,7 +2486,7 @@ var envMissingExample = {
           if (documented.has(name) || removedReads.has(name) || isStandard(name)) continue;
           findings.push({
             key: name,
-            message: `Reads environment variable \`${name}\`, missing from ${where2}`,
+            message: `Reads environment variable ${codeSpan(name)}, missing from ${where2}`,
             locations: [{ path: file.path, line: l.newLine }],
             evidence: l.text.trim()
           });
@@ -2569,7 +2579,7 @@ function mergeOverloads(sigs) {
   return [...byName.values()].map(({ shapes: _, ...s }) => s);
 }
 function describeChange(before, after, positional = false) {
-  if (before.includes("|") || after.includes("|")) return `went from \`${overloads(before)}\` to \`${overloads(after)}\``;
+  if (before.includes("|") || after.includes("|")) return `went from ${codeSpan(overloads(before))} to ${codeSpan(overloads(after))}`;
   if (positional) return describePositional(before, after);
   const name = (p) => p.split("=")[0].replace(/\?$/, "");
   const old = new Map(before.map((p) => [name(p), p]));
@@ -2578,9 +2588,9 @@ function describeChange(before, after, positional = false) {
   const added = after.filter((p) => !old.has(name(p)));
   const removed = before.filter((p) => !now.has(name(p)));
   const changed = after.filter((p) => old.has(name(p)) && old.get(name(p)) !== p);
-  if (added.length) parts.push(`added ${added.map((p) => `\`${p}\``).join(", ")}`);
-  if (removed.length) parts.push(`removed ${removed.map((p) => `\`${p}\``).join(", ")}`);
-  if (changed.length) parts.push(`changed ${changed.map((p) => `\`${old.get(name(p))}\` to \`${p}\``).join(", ")}`);
+  if (added.length) parts.push(`added ${added.map((p) => codeSpan(p)).join(", ")}`);
+  if (removed.length) parts.push(`removed ${removed.map((p) => codeSpan(p)).join(", ")}`);
+  if (changed.length) parts.push(`changed ${changed.map((p) => `${codeSpan(old.get(name(p)))} to ${codeSpan(p)}`).join(", ")}`);
   if (parts.length === 0) parts.push(`changed order from \`(${before.join(", ")})\` to \`(${after.join(", ")})\``);
   return parts.join("; ");
 }
@@ -2696,10 +2706,10 @@ function describePositional(before, after) {
   const parts = [];
   const changed = [];
   for (let i = 0; i < Math.min(before.length, after.length); i++) {
-    if (shape(before[i]) !== shape(after[i])) changed.push(`\`${before[i]}\` to \`${after[i]}\``);
+    if (shape(before[i]) !== shape(after[i])) changed.push(`${codeSpan(before[i])} to ${codeSpan(after[i])}`);
   }
-  if (after.length > before.length) parts.push(`added ${after.slice(before.length).map((p) => `\`${p}\``).join(", ")}`);
-  if (before.length > after.length) parts.push(`removed ${before.slice(after.length).map((p) => `\`${p}\``).join(", ")}`);
+  if (after.length > before.length) parts.push(`added ${after.slice(before.length).map((p) => codeSpan(p)).join(", ")}`);
+  if (before.length > after.length) parts.push(`removed ${before.slice(after.length).map((p) => codeSpan(p)).join(", ")}`);
   if (changed.length) parts.push(`changed ${changed.join(", ")}`);
   return parts.join("; ");
 }
@@ -2734,7 +2744,7 @@ var interfaceUntested = {
         if (changedTests.some((t) => word.test(t))) continue;
         findings.push({
           key: sig.name,
-          message: `Parameters of \`${sig.name}\`: ${describeChange(old.params, sig.params, !file.path.endsWith(".py"))}; no test changed by the diff mentions it`,
+          message: `Parameters of ${codeSpan(sig.name)}: ${describeChange(old.params, sig.params, !file.path.endsWith(".py"))}; no test changed by the diff mentions it`,
           locations: [{ path: file.path, line: sig.line }],
           evidence: (ctx.readHead(file.path) ?? "").split("\n")[sig.line - 1].trim()
         });
@@ -2783,9 +2793,9 @@ var testsDelta = {
     for (const [id, now] of head.results) {
       const before = base.results.get(id);
       if (before === "passed" && now === "failed") {
-        findings.push(finding(id, `Test \`${id}\` fails at head and passed at base`, `${id}: passed -> failed`));
+        findings.push(finding(id, `Test ${codeSpan(id)} fails at head and passed at base`, `${id}: passed -> failed`));
       } else if (before !== void 0 && before !== "skipped" && now === "skipped") {
-        findings.push(finding(id, `Test \`${id}\` is skipped at head and ran at base`, `${id}: ${before} -> skipped`));
+        findings.push(finding(id, `Test ${codeSpan(id)} is skipped at head and ran at base`, `${id}: ${before} -> skipped`));
       }
     }
     if (head.results.size < base.results.size) {
@@ -2794,7 +2804,7 @@ var testsDelta = {
         findings.push(
           finding(
             id,
-            `Test \`${id}\` ran at base and is missing at head (${base.results.size} tests at base, ${head.results.size} at head)`,
+            `Test ${codeSpan(id)} ran at base and is missing at head (${base.results.size} tests at base, ${head.results.size} at head)`,
             `${id}: ${before} -> missing`
           )
         );
@@ -2829,7 +2839,7 @@ function toMarkdown(report) {
   const range = `${short(report.base)}..${short(report.head)}`;
   const n = report.findings.length;
   const lines = [
-    `### rsp \xB7 ${n} ${n === 1 ? "fact" : "facts"} on ${range} (rsp ${report.tool.version})`,
+    `### RSP \xB7 ${n} ${n === 1 ? "fact" : "facts"} on ${range} (rsp ${report.tool.version})`,
     ""
   ];
   if (n === 0) {
@@ -2838,14 +2848,14 @@ function toMarkdown(report) {
   } else {
     lines.push("| Rule | Where | Fact | Evidence |", "| --- | --- | --- | --- |");
     for (const f of report.findings) {
-      lines.push(`| ${f.ruleId} | ${where(f)} | ${cell(f.message)} | ${code(f.evidence)} |`);
+      lines.push(`| ${inline(f.ruleId)} | ${where(f)} | ${inline(f.message)} | ${cell(codeSpan(f.evidence))} |`);
     }
   }
   const opts = report.options.map((o) => ` ${o}`).join("");
-  if (report.config) lines.push("", `Configuration: \`${report.config}\` from the base commit.`);
+  if (report.config) lines.push("", `Configuration: ${codeSpan(report.config)} from the base commit.`);
   lines.push(
     "",
-    `Reproduce: \`rsp check --base ${report.base} --head ${report.head}${opts}\``,
+    `Reproduce: ${codeSpan(`rsp check --base ${report.base} --head ${report.head}${opts}`)}`,
     "",
     `<sub>Install: \`npm install -g github:fedeveloper/rsp#v${report.tool.version}\`. Findings are facts about the diff, not a review: no findings does not mean the change is correct.</sub>`,
     ""
@@ -2855,15 +2865,47 @@ function toMarkdown(report) {
 function where(f) {
   const loc = f.locations[0];
   if (!loc) return "";
-  return code(loc.line ? `${loc.path}:${loc.line}` : loc.path);
+  return cell(codeSpan(loc.line ? `${loc.path}:${loc.line}` : loc.path));
 }
-function code(s) {
-  const fence = s.includes("`") ? "``" : "`";
-  const pad = s.startsWith("`") || s.endsWith("`") ? " " : "";
-  return `${fence}${pad}${s.replace(/\|/g, "\\|")}${pad}${fence}`;
+function inline(s) {
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    const run = /^`+/.exec(s.slice(i));
+    if (run) {
+      const fence = run[0];
+      const close = findClosing(s, i + fence.length, fence.length);
+      if (close >= 0) {
+        out += cell(s.slice(i, close + fence.length));
+        i = close + fence.length;
+      } else {
+        out += "&#96;".repeat(fence.length);
+        i += fence.length;
+      }
+      continue;
+    }
+    out += escapeText(s[i]);
+    i++;
+  }
+  return out;
+}
+function findClosing(s, from, n) {
+  for (const m of s.slice(from).matchAll(/`+/g)) {
+    if (m[0].length === n) return from + m.index;
+  }
+  return -1;
+}
+function escapeText(c) {
+  if (c === "<") return "&lt;";
+  if (c === ">") return "&gt;";
+  if (c === "&") return "&amp;";
+  if (c === "@") return "&#64;";
+  if (c === "|") return "&#124;";
+  if (c === "\n" || c === "\r") return " ";
+  return /[\\*_[\]()#!~]/.test(c) ? `\\${c}` : c;
 }
 function cell(s) {
-  return s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+  return s.split("|").join("\\|").replace(/[\r\n]+/g, " ");
 }
 function short(sha) {
   return sha.slice(0, 12);
@@ -2907,7 +2949,8 @@ function shellQuote(s) {
 
 // src/test-runner.ts
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readdirSync, readFileSync as readFileSync2, rmSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync as readFileSync2, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 function runTestsAtBaseAndHead(opts) {
   const head = resolveCommit(opts.repoDir, opts.head);
@@ -2921,7 +2964,10 @@ function runTestsAtBaseAndHead(opts) {
       git(opts.repoDir, ["worktree", "add", "--detach", "--force", dir, commit]);
     }
     opts.log(`::group::rsp: tests at ${label} ${commit.slice(0, 12)}${attempt > 0 ? ` (rerun ${attempt})` : ""}`);
-    const res = spawnSync("bash", ["-c", opts.command], { cwd: dir, stdio: ["ignore", "inherit", "inherit"] });
+    const stop = randomBytes(16).toString("hex");
+    opts.log(`::stop-commands::${stop}`);
+    const res = spawnSync("bash", ["-c", opts.command], { cwd: dir, env: testEnv(process.env), stdio: ["ignore", "inherit", "inherit"] });
+    opts.log(`::${stop}::`);
     opts.log(`::endgroup::`);
     opts.log(`rsp: test command at ${label} exited with ${res.status ?? res.signal}`);
     const found = findFiles(dir, globToRegExp(opts.junit));
@@ -2953,12 +2999,23 @@ function runTestsAtBaseAndHead(opts) {
     }
   }
 }
+function testEnv(env) {
+  const out = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (/^(INPUT_|ACTIONS_)/.test(key)) continue;
+    if (/^GITHUB_(TOKEN|ENV|OUTPUT|PATH|STATE|STEP_SUMMARY)$/.test(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
 function findFiles(root, pattern, dir = root, out = []) {
   for (const entry of readdirSync(dir).sort()) {
     if (entry === ".git" || entry === "node_modules" || entry === ".venv") continue;
     const path = join(dir, entry);
     const rel = relative(root, path);
-    if (statSync(path).isDirectory()) findFiles(root, pattern, path, out);
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) continue;
+    if (stat.isDirectory()) findFiles(root, pattern, path, out);
     else if (pattern.test(rel)) out.push(rel);
   }
   return out;
@@ -2987,7 +3044,16 @@ async function runAction(env = process.env, fetchImpl = fetch) {
     return 1;
   }
   let junit;
+  if (input("test-command") && env.GITHUB_EVENT_NAME === "pull_request_target") {
+    log("::error::test-command runs the pull request's code and is refused on pull_request_target; use the pull_request event.");
+    return 1;
+  }
   if (input("test-command")) {
+    if (persistedCredentials(repoDir)) {
+      log(
+        "::warning::The checkout keeps the token in .git/config, where the test command can read it. Use actions/checkout with persist-credentials: false."
+      );
+    }
     try {
       junit = runTestsAtBaseAndHead({
         repoDir,
@@ -3069,11 +3135,22 @@ async function upsertComment(fetchImpl, api, token, repo, number, body, hasFindi
   let existing;
   for (let page = 1; !existing; page++) {
     const comments = await request("GET", `/repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`);
-    existing = comments.find((c) => c.body?.includes(COMMENT_MARKER));
+    existing = comments.find((c) => c.user?.type === "Bot" && c.body?.startsWith(COMMENT_MARKER));
     if (comments.length < 100) break;
   }
   if (existing) await request("PATCH", `/repos/${repo}/issues/comments/${existing.id}`, { body });
   else if (hasFindings) await request("POST", `/repos/${repo}/issues/${number}/comments`, { body });
+}
+function persistedCredentials(repoDir) {
+  try {
+    return execFileSync2("git", ["config", "--local", "--get-regexp", "^http\\..*\\.extraheader$"], {
+      cwd: repoDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim() !== "";
+  } catch {
+    return false;
+  }
 }
 function annotation(f) {
   const loc = f.locations[0];
@@ -3094,8 +3171,8 @@ function log(line) {
 
 // src/action-main.ts
 runAction().then(
-  (code2) => {
-    process.exitCode = code2;
+  (code) => {
+    process.exitCode = code;
   },
   (err) => {
     process.stdout.write(`::error::rsp failed: ${err instanceof Error ? err.message : String(err)}

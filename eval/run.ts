@@ -2,15 +2,16 @@
 // resulting diff and writes one results file per corpus. Exits 1 if any rule
 // misses a risky mutation or reports on a mutation it was not expected to.
 //
-// Corpora: the sample Python project in eval/project (eval/RESULTS.md) and a
-// real JavaScript application cloned at a pinned commit (eval/RESULTS-mtgo.md).
-// RSP_EVAL_EXTRA=<file> adds a corpus kept outside this repository, such as
-// one built on private code: the file's default export receives the mutation
-// helpers and returns { repo, commit, describe, mutations }, and the results
-// are written next to it as RESULTS.md.
+// The corpus in this repository is the sample Python project in eval/project
+// (eval/RESULTS.md). RSP_EVAL_EXTRA adds corpora kept outside the repository,
+// such as real applications whose code should not be copied here: a list of
+// files separated by the path delimiter, each with a default export that
+// receives the mutation helpers and returns { repo, commit, describe,
+// mutations }. Each file's results are written next to it as
+// RESULTS-<name>.md, and its repository is cloned at run time.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { check } from "../src/index.js";
 import { ALL_RULES } from "../src/rules/index.js";
@@ -19,7 +20,6 @@ import { VERSION } from "../src/version.js";
 import { makeRepoFromTrees } from "../test/helpers.js";
 import * as helpers from "./mutations.js";
 import { type Files, MUTATIONS, type Mutation } from "./mutations.js";
-import { MTGO_COMMIT, MTGO_MUTATIONS, MTGO_REPO } from "./mutations-mtgo.js";
 
 interface Corpus {
   /** What the mutations are applied to, as a sentence fragment for the report. */
@@ -150,18 +150,9 @@ const corpora: Corpus[] = [
     mutations: MUTATIONS,
     results: join(import.meta.dirname, "RESULTS.md"),
   },
-  {
-    describe:
-      `[MTGO Collection Tracker](${MTGO_REPO}) at commit \`${MTGO_COMMIT.slice(0, 12)}\`, a real Node, Express ` +
-      "and React application, cloned at run time",
-    source: "eval/mutations-mtgo.ts",
-    files: readRepo(MTGO_REPO, MTGO_COMMIT),
-    mutations: MTGO_MUTATIONS,
-    results: join(import.meta.dirname, "RESULTS-mtgo.md"),
-  },
 ];
-if (process.env.RSP_EVAL_EXTRA) {
-  const file = resolve(process.env.RSP_EVAL_EXTRA);
+for (const path of (process.env.RSP_EVAL_EXTRA ?? "").split(delimiter).filter(Boolean)) {
+  const file = resolve(path);
   const extra = (await import(pathToFileURL(file).href)).default(helpers) as {
     repo: string;
     commit: string;
@@ -170,10 +161,10 @@ if (process.env.RSP_EVAL_EXTRA) {
   };
   corpora.push({
     describe: `${extra.describe} at commit \`${extra.commit.slice(0, 12)}\`, cloned at run time`,
-    source: relative(process.cwd(), file),
+    source: basename(file),
     files: readRepo(extra.repo, extra.commit),
     mutations: extra.mutations,
-    results: join(dirname(file), "RESULTS.md"),
+    results: join(dirname(file), `RESULTS-${basename(file).replace(/^mutations-|\.[jt]s$/g, "")}.md`),
   });
 }
 

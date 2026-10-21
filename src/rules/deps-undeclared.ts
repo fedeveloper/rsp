@@ -5,6 +5,7 @@ import { jsManifests } from "./js-manifests.js";
 import { importedModules, normalizeDist, optionalModules, stringLines } from "./python.js";
 import { declaredDependencies } from "./python-manifests.js";
 import { PYTHON_STDLIB } from "./python-stdlib.js";
+import { codeSpan } from "../text.js";
 
 // Import names whose distribution is named differently on PyPI.
 const KNOWN_DISTRIBUTIONS: Record<string, string[]> = {
@@ -81,7 +82,7 @@ function python(ctx: DiffContext): RawFinding[] {
         if (candidates(mod).some((c) => declared.names.has(c))) continue;
         findings.push({
           key: mod,
-          message: `Imports \`${mod}\`, not declared in ${where}`,
+          message: `Imports ${codeSpan(mod)}, not declared in ${where}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim(),
         });
@@ -122,7 +123,7 @@ function javascript(ctx: DiffContext): RawFinding[] {
         if (isInTryBlock(lines, l.newLine! - 1)) continue;
         findings.push({
           key: name,
-          message: `Imports \`${name}\`, not declared in ${where}`,
+          message: `Imports ${codeSpan(name)}, not declared in ${where}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim(),
         });

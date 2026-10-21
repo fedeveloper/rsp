@@ -8,7 +8,7 @@ rsp is a rule-based verifier for code changes, aimed at plausible but wrong chan
 
 It is not an AI reviewer and it never judges whether a change is correct. A finding says what changed, never whether it is bad. Whether a finding blocks a merge is configuration, and the default is advisory (`fail-on: never`).
 
-The name is not settled yet. The working expansion is "Reproducible Signals for Pull requests".
+The name is **RSP: Reproducible Shortcut Patrol** (chosen 2026-10-21). The command, the package and the config file keep the lower-case `rsp`; the Marketplace listing, the README title and the report header use "RSP".
 
 ## Decisions
 
@@ -28,6 +28,12 @@ The name is not settled yet. The working expansion is "Reproducible Signals for 
 - **Diff-scoped.** Rules look only at added or changed lines, so pre-existing debt is never reported. Lines moved between files are not new.
 - **Reproducible.** Same commits and rsp version give byte-identical output. Rules use no network and no clock. Findings are sorted and carry a fingerprint that does not depend on line numbers.
 
+## Security rules
+
+- Text from the diff is untrusted. Rules quote names and code with `codeSpan` (`src/text.ts`), the Markdown report escapes everything outside code spans, and log lines escape workflow commands. A new message that interpolates diff text must go through `codeSpan`.
+- RSP executes repository code only through `test-command`, and then without `INPUT_*`, `ACTIONS_*` or step files in the environment, with workflow commands stopped, and never on `pull_request_target`.
+- Workflows pin actions by commit SHA, set `permissions: {}` at the top and grant per job, and check out with `persist-credentials: false`.
+
 ## Code layout
 
 - `src/engine.ts`, `src/context.ts`, `src/git.ts`, `src/diff.ts`: the core, from two commits to a `DiffContext`, then to sorted findings.
@@ -41,7 +47,7 @@ The name is not settled yet. The working expansion is "Reproducible Signals for 
 Passing our own tests proves consistency, not that a rule works on real code. Every rule change goes through all four layers:
 
 1. **Golden fixtures.** Add a case per new behaviour, positive and negative, with expectations written by hand before running the rule. Every case runs every rule, so a rule that fires on another rule's fixture fails too.
-2. **Labelled mutations** (`npm run eval`). Risky and benign changes applied to the sample Python project (`eval/mutations.ts`) and to the maintainer's real app MTGO Collection Tracker, cloned at a pinned commit (`eval/mutations-mtgo.ts`). The maintainer's private Python game rogue is a third corpus kept outside the repository, because rsp is public: it runs with `RSP_EVAL_EXTRA=<file>`, and its file lives in the project's shared files, never in git. The results files are committed and CI fails if they change. `tests/delta` is covered by fixtures and Action tests instead, because it needs test runs.
+2. **Labelled mutations** (`npm run eval`). Risky and benign changes applied to the sample Python project (`eval/mutations.ts`); the results file is committed and CI fails if it changes. Corpora built on real applications whose code must not be copied into this public repository live outside it and run with `RSP_EVAL_EXTRA=<file>[:<file>...]`; never commit their mutations, results or names. `tests/delta` is covered by fixtures and Action tests instead, because it needs test runs.
 3. **Real history** (`eval/real-history.ts`). Run the rules on about 100 recent commits of several public projects and check each finding against git independently of the rules. Every false fact found there gets fixed and becomes a golden fixture. This layer is where all false facts so far were found: aliased `TYPE_CHECKING`, optional imports, CI matrix keys, imports inside template literals, helper files in test folders, eslint replaced by oxlint.
 4. **Action tests** against a fake GitHub API, including a run from the committed bundle.
 

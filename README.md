@@ -1,11 +1,9 @@
-# rsp
+# RSP: Reproducible Shortcut Patrol
 
-**Reproducible Signals for Pull requests** (working name).
-
-rsp is a rule-based verifier for code changes. It reads the diff of a pull request, runs a fixed set of bounded checks and reports only reproducible facts: which rule fired, in which file and on which line, on what evidence, and the exact command that produces the same finding again.
+RSP is a rule-based verifier for code changes. It reads the diff of a pull request, runs a fixed set of bounded checks and reports only reproducible facts: which rule fired, in which file and on which line, on what evidence, and the exact command that produces the same finding again.
 
 ```markdown
-### rsp · 3 facts on 3f1c2a9b7d10..9e8d7c6b5a40 (rsp 0.3.0)
+### RSP · 3 facts on 3f1c2a9b7d10..9e8d7c6b5a40 (rsp 0.4.0)
 
 | Rule | Where | Fact | Evidence |
 | --- | --- | --- | --- |
@@ -18,22 +16,23 @@ Reproduce: `rsp check --base 3f1c2a9b7d10... --head 9e8d7c6b5a40...`
 
 It does not review code with a model, it does not score changes and it never says whether a change is correct. It points at a small number of specific, checkable things that plausible-looking changes tend to get wrong, and leaves the judgement to the people reviewing.
 
-- [Why rsp exists](#why-rsp-exists)
+- [Why RSP exists](#why-rsp-exists)
 - [Principles](#principles)
 - [Quick start](#quick-start)
-- [What rsp reports](#what-rsp-reports)
+- [What RSP reports](#what-rsp-reports)
 - [Configuration: `.rsp.toml`](#configuration-rsptoml)
 - [Test results before and after](#test-results-before-and-after)
-- [Integrating rsp into your workflow](#integrating-rsp-into-your-workflow)
+- [Integrating RSP into your workflow](#integrating-rsp-into-your-workflow)
 - [Output](#output)
 - [GitHub Action reference](#github-action-reference)
 - [Command line reference](#command-line-reference)
-- [How rsp is validated](#how-rsp-is-validated)
+- [How RSP is validated](#how-rsp-is-validated)
+- [Security](#security)
 - [Limitations](#limitations)
 - [FAQ](#faq)
 - [Development](#development)
 
-## Why rsp exists
+## Why RSP exists
 
 Coding assistants and agents now write a large share of pull requests. Their changes usually look right: they compile, they read well, and the summary says the task is done. The failures that remain are the plausible-but-wrong kind, and many of them come from the same few shortcuts taken to make something "work":
 
@@ -45,7 +44,7 @@ Coding assistants and agents now write a large share of pull requests. Their cha
 - the parameters of a public function change and no test is updated to match;
 - tests that passed before the change fail, or quietly stop running, after it.
 
-None of these needs a model to detect. Each is a mechanical property of the diff, and each is easy to miss when reading a large change that otherwise looks fine. rsp checks for exactly these, and nothing more, so that a reviewer can spend attention on what only a person can judge.
+None of these needs a model to detect. Each is a mechanical property of the diff, and each is easy to miss when reading a large change that otherwise looks fine. RSP checks for exactly these, and nothing more, so that a reviewer can spend attention on what only a person can judge.
 
 The same checks are just as useful on changes written by people: the shortcuts are human ones first.
 
@@ -53,45 +52,49 @@ The same checks are just as useful on changes written by people: the shortcuts a
 
 These constrain every rule and every change to rsp.
 
-- **Facts, not judgements.** A finding says what changed ("Added `@ts-ignore` comment", "Imports `httpx`, not declared in pyproject.toml"), never that it is bad or what to do. A skipped test can be the right call; rsp only makes sure it is a visible one.
+- **Facts, not judgements.** A finding says what changed ("Added `@ts-ignore` comment", "Imports `httpx`, not declared in pyproject.toml"), never that it is bad or what to do. A skipped test can be the right call; RSP only makes sure it is a visible one.
 - **Precision before recall.** When a case is ambiguous, the rule stays silent. A false fact costs more trust than a missed one, so rules give up coverage to avoid reporting things that are not true.
 - **Diff-scoped.** Rules look only at lines added or changed by the pull request. Pre-existing debt is never reported, and lines moved from one file to another are not new.
-- **Reproducible.** The same two commits and the same rsp version give byte-identical output. Rules use no network and no clock. Findings are sorted and carry a fingerprint that does not depend on line numbers, and every finding carries the command that reproduces it.
-- **Advisory by default.** Whether a finding blocks a merge is your configuration. Out of the box rsp comments and never fails the build.
+- **Reproducible.** The same two commits and the same RSP version give byte-identical output. Rules use no network and no clock. Findings are sorted and carry a fingerprint that does not depend on line numbers, and every finding carries the command that reproduces it.
+- **Advisory by default.** Whether a finding blocks a merge is your configuration. Out of the box RSP comments and never fails the build.
 
 ## Quick start
 
 Add a workflow to the repository, for example `.github/workflows/rsp.yml`:
 
 ```yaml
-name: rsp
+name: RSP
 on: pull_request
-permissions:
-  contents: read
-  pull-requests: write
+permissions: {}
 jobs:
   rsp:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # only to keep the comment up to date
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0 # rsp needs the base commit too
-      - uses: fedeveloper/rsp@v0.3.0
+          fetch-depth: 0 # RSP needs the base commit too
+          persist-credentials: false
+      - uses: fedeveloper/rsp@v0.4.0
 ```
 
-On every pull request rsp keeps one comment up to date with its findings, writes the same report to the job summary, adds annotations to the diff and sets two outputs: `findings` (the count) and `report` (the path of the JSON report). When a later push removes every finding, the comment says so instead of disappearing.
+For production use, pin the action to the full commit SHA of a release instead of the tag (`uses: fedeveloper/rsp@<sha> # v0.4.0`), and let Dependabot update it; see [Security](#security).
+
+On every pull request RSP keeps one comment up to date with its findings, writes the same report to the job summary, adds annotations to the diff and sets two outputs: `findings` (the count) and `report` (the path of the JSON report). When a later push removes every finding, the comment says so instead of disappearing.
 
 To try it locally first:
 
 ```sh
-npm install -g github:fedeveloper/rsp#v0.3.0
+npm install -g github:fedeveloper/rsp#v0.4.0
 cd your-repo
 rsp check --base origin/main
 ```
 
-rsp needs Node 22 or later and git. It supports Python and JavaScript/TypeScript (Node and front-end code); the CI checks work for any GitHub Actions workflow.
+RSP needs Node 22 or later and git. It supports Python and JavaScript/TypeScript (Node and front-end code); the CI checks work for any GitHub Actions workflow.
 
-## What rsp reports
+## What RSP reports
 
 There are five rules. Each looks at the diff between the merge-base of the pull request and its head, and each finding has a **key**, which is what you name in `.rsp.toml` to accept that kind of finding (see [Configuration](#configuration-rsptoml)). `rsp --list-rules` prints the same information.
 
@@ -159,7 +162,7 @@ Tests that already failed at base are not reported: they are not caused by the p
 
 ## Configuration: `.rsp.toml`
 
-rsp works without configuration. When a repository needs exceptions, it adds `.rsp.toml` at its root:
+RSP works without configuration. When a repository needs exceptions, it adds `.rsp.toml` at its root:
 
 ```toml
 # Never look at these files, for any rule.
@@ -215,14 +218,16 @@ Give the Action the command that installs dependencies and runs the tests:
 - uses: actions/setup-python@v6
   with:
     python-version: "3.12"
-- uses: fedeveloper/rsp@v0.3.0
+- uses: fedeveloper/rsp@v0.4.0
   with:
     test-command: pip install -e '.[test]' && pytest --junitxml=junit.xml
 ```
 
-rsp then checks out the base and the head each in its own git worktree under the runner's temporary directory, runs the command in each (in collapsible log groups), collects the files matching `junit` (default `**/junit*.xml`) and compares them. The worktrees are removed afterwards. If tests fail at head that passed at base, the head run is repeated up to `test-retries` times (default 1) and a test that passes in any run counts as passing, so a flaky test does not become a finding. The exit code of the test command is logged but does not matter: a test suite with failures is exactly what the rule reads.
+The test command runs the pull request's code, so RSP runs it with care: without the Action's inputs (which hold the GitHub token) or the runtime tokens of Actions in its environment, without the files through which a step changes later steps (`GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`), and with workflow commands switched off while it prints. It refuses to run on `pull_request_target`, and warns when the checkout left a token in `.git/config` (use `persist-credentials: false`). See [Security](#security).
 
-Running the suite twice doubles the test time of the job. For a slow suite, put rsp in its own job so it runs in parallel with your normal CI.
+RSP then checks out the base and the head each in its own git worktree under the runner's temporary directory, runs the command in each (in collapsible log groups), collects the files matching `junit` (default `**/junit*.xml`) and compares them. The worktrees are removed afterwards. If tests fail at head that passed at base, the head run is repeated up to `test-retries` times (default 1) and a test that passes in any run counts as passing, so a flaky test does not become a finding. The exit code of the test command is logged but does not matter: a test suite with failures is exactly what the rule reads.
+
+Running the suite twice doubles the test time of the job. For a slow suite, put RSP in its own job so it runs in parallel with your normal CI.
 
 ### From the command line, or with reports you already have
 
@@ -234,11 +239,11 @@ rsp check --base origin/main --junit-base base/junit.xml --junit-head head/junit
 
 Both options are repeatable for sharded suites; results from several files of the same commit are merged, and a test that passed in any of them counts as passed.
 
-## Integrating rsp into your workflow
+## Integrating RSP into your workflow
 
 ### 1. Start advisory
 
-Add the [quick start](#quick-start) workflow and leave `fail-on` at `never`. For a week or two, read the comments on real pull requests. Every finding should be true; if you ever see one that is not, that is a bug in rsp and worth [an issue](https://github.com/fedeveloper/rsp/issues). What you will see instead are true findings that your team considers fine, such as `# type: ignore` in a typed codebase.
+Add the [quick start](#quick-start) workflow and leave `fail-on` at `never`. For a week or two, read the comments on real pull requests. Every finding should be true; if you ever see one that is not, that is a bug in RSP and worth [an issue](https://github.com/fedeveloper/rsp/issues). What you will see instead are true findings that your team considers fine, such as `# type: ignore` in a typed codebase.
 
 ### 2. Encode your conventions
 
@@ -249,7 +254,7 @@ Turn each accepted pattern into `.rsp.toml` (`allow`, `exclude` or `enabled = fa
 When the remaining findings are ones you want to stop at, set `fail-on: any`:
 
 ```yaml
-- uses: fedeveloper/rsp@v0.3.0
+- uses: fedeveloper/rsp@v0.4.0
   with:
     fail-on: any
 ```
@@ -258,7 +263,7 @@ and make the check required in branch protection. Findings that should stay info
 
 ### Pull requests from coding agents
 
-rsp is designed for the pull requests that coding agents open: they are large, they look finished, and the shortcuts listed above are exactly the ones agents take when a test or a type check stands between them and "done".
+RSP is designed for the pull requests that coding agents open: they are large, they look finished, and the shortcuts listed above are exactly the ones agents take when a test or a type check stands between them and "done".
 
 - **In CI.** The Action runs on agent pull requests like on any other. Many teams make it blocking only for them, for example with `if: github.actor == 'my-agent[bot]'` on a `fail-on: any` step.
 - **Inside the agent's loop.** Give the agent the command and ask it to run it before it reports the task as done: `rsp check --base origin/main --format json`. The JSON is easy for an agent to read, and because findings are facts rather than opinions, the agent can either fix the change or explain each finding in the pull request description. For Claude Code this fits a project instruction in `CLAUDE.md` or a hook on stop; other agents have equivalent hooks.
@@ -266,25 +271,25 @@ rsp is designed for the pull requests that coding agents open: they are large, t
 
   ```sh
   #!/bin/sh
-  rsp check --base origin/main || exit 0
+  RSP check --base origin/main || exit 0
   ```
 
   This prints findings without blocking; the exit code of `rsp check` never depends on findings, only on usage errors.
 
 ### Monorepos
 
-Run rsp once at the repository root. `deps/undeclared` resolves each JavaScript file against the nearest `package.json` files up to the root and knows workspace packages; Python files are checked against all Python manifests in the repository. Use `exclude` for generated or vendored directories.
+Run RSP once at the repository root. `deps/undeclared` resolves each JavaScript file against the nearest `package.json` files up to the root and knows workspace packages; Python files are checked against all Python manifests in the repository. Use `exclude` for generated or vendored directories.
 
 ### Forks
 
-On pull requests from forks the `github.token` is read-only, so the comment is skipped with a warning; the job summary and annotations still carry the full report. A `test-command` runs code from the pull request, so treat it like any other step that runs the tests of a fork.
+On pull requests from forks the `github.token` is read-only, so the comment is skipped with a warning; the job summary and annotations still carry the full report. A `test-command` runs code from the pull request, so treat it like any other step that runs the tests of a fork: use the `pull_request` event, never `pull_request_target`.
 
 ### Other CI systems
 
 The CLI is self-contained. In any CI with git and Node 22:
 
 ```sh
-npx --yes github:fedeveloper/rsp#v0.3.0 check --base "$TARGET_BRANCH" --format json > rsp.json
+npx --yes github:fedeveloper/rsp#v0.4.0 check --base "$TARGET_BRANCH" --format json > rsp.json
 ```
 
 and turn `rsp.json` into whatever your CI shows. With `--format markdown` (the default) the output can be posted as a merge request comment as is.
@@ -311,8 +316,8 @@ The Markdown report is the comment shown above. The JSON report, from `--format 
   ],
   "head": "1d2dc83171117d1cd416497dbf8f687b2dd6b1f6",
   "options": [],
-  "rules": [{ "id": "checks/disabled", "version": "0.3.0" }],
-  "tool": { "name": "rsp", "version": "0.3.0" }
+  "rules": [{ "id": "checks/disabled", "version": "0.4.0" }],
+  "tool": { "name": "rsp", "version": "0.4.0" }
 }
 ```
 
@@ -338,7 +343,7 @@ The Markdown report is the comment shown above. The JSON report, from `--format 
 | `findings` | Number of findings. |
 | `report` | Path of the JSON report. |
 
-The Action needs the full history of both commits: use `actions/checkout` with `fetch-depth: 0`. It runs only on `pull_request` and `pull_request_target` events and skips other events with a notice.
+The Action needs the full history of both commits: use `actions/checkout` with `fetch-depth: 0`. It runs on events that carry a pull request (`pull_request`, and `pull_request_target` without `test-command`) and skips other events with a notice.
 
 ## Command line reference
 
@@ -360,23 +365,22 @@ Options:
   --help            Print this help and exit
 ```
 
-The base is resolved to its merge-base with the head, exactly as GitHub computes the diff of a pull request. Findings never change the exit code: 0 means rsp ran, 2 a usage or configuration error.
+The base is resolved to its merge-base with the head, exactly as GitHub computes the diff of a pull request. Findings never change the exit code: 0 means RSP ran, 2 a usage or configuration error.
 
-## How rsp is validated
+## How RSP is validated
 
-Passing its own tests proves that rsp is consistent, not that its rules work on real code. Every rule change goes through four layers, and a fifth evaluation measures rsp on patches written by coding agents.
+Passing its own tests proves that RSP is consistent, not that its rules work on real code. Every rule change goes through four layers, and a fifth evaluation measures RSP on patches written by coding agents.
 
 1. **Golden fixtures** (`test/fixtures/<rule>/<case>/`). Each case is a `base/` tree, a `head/` tree and an `expected.json` written by hand before running the rule. The harness builds a throwaway git repository per case with fixed authors and dates, and runs **every** rule on **every** case, so a rule that fires on another rule's fixture fails too.
 2. **Labelled mutations** (`npm run eval`). Risky and benign changes are applied to each corpus; each risky change must be reported by exactly the expected rules and each benign one by none. CI fails if the results change.
    - A small sample Python project: [eval/RESULTS.md](eval/RESULTS.md).
-   - [MTGO Collection Tracker](https://github.com/fedeveloper/MTGO-Collection-Tracker), a real Node, Express and React application, at a pinned commit: [eval/RESULTS-mtgo.md](eval/RESULTS-mtgo.md).
-   - Corpora on private code can be added without committing them: `RSP_EVAL_EXTRA=<file>` loads one from outside the repository (see `eval/run.ts`). The maintainer uses this for a private Python game with no manifests, tests or CI, to check that rules stay silent where a convention does not exist.
-3. **Real history** (`eval/real-history.ts`). Every rule runs on about 100 recent commits of public projects, and each line-level finding is checked against git independently of the rules: the reported line holds the evidence, the line occurs more often after the commit than before, and for signatures the definition really changed. Python: flask, requests, httpx, fastapi, click ([eval/REAL_HISTORY.md](eval/REAL_HISTORY.md)). JavaScript/TypeScript: MTGO Collection Tracker, express, axios, fastify, vite, outline ([eval/REAL_HISTORY_JS.md](eval/REAL_HISTORY_JS.md)). Every false fact found this way was fixed and became a golden fixture.
+   - Corpora built on real applications whose code should not be copied here are kept outside the repository and loaded with `RSP_EVAL_EXTRA=<file>` (see `eval/run.ts`). Their results are not part of CI.
+3. **Real history** (`eval/real-history.ts`). Every rule runs on about 100 recent commits of public projects, and each line-level finding is checked against git independently of the rules: the reported line holds the evidence, the line occurs more often after the commit than before, and for signatures the definition really changed. Python: flask, requests, httpx, fastapi, click ([eval/REAL_HISTORY.md](eval/REAL_HISTORY.md)). JavaScript/TypeScript: express, axios, fastify, vite, outline ([eval/REAL_HISTORY_JS.md](eval/REAL_HISTORY_JS.md)). Every false fact found this way was fixed and became a golden fixture.
 4. **Action tests** against a fake GitHub API: comment created, updated and cleared, read-only tokens, `fail-on`, invalid configuration, the test command at base and head with a flaky rerun, and one run from the committed bundle.
 
 ### Patches written by coding agents
 
-`eval/swe-bench.ts` runs rsp on the 300 tasks of [SWE-bench Lite](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite), real issues of 12 Python projects. For each task it checks the pull request that fixed the issue and the patches written by three agents from public leaderboard submissions (SWE-agent with Claude 4 Sonnet, Agentless Lite with o3-mini, Moatless Tools with DeepSeek V3). The full report is [eval/SWE_BENCH.md](eval/SWE_BENCH.md).
+`eval/swe-bench.ts` runs RSP on the 300 tasks of [SWE-bench Lite](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite), real issues of 12 Python projects. For each task it checks the pull request that fixed the issue and the patches written by three agents from public leaderboard submissions (SWE-agent with Claude 4 Sonnet, Agentless Lite with o3-mini, Moatless Tools with DeepSeek V3). The full report is [eval/SWE_BENCH.md](eval/SWE_BENCH.md).
 
 | Patches by | Patches | With findings | Resolved, with findings | Not resolved, with findings |
 | --- | --- | --- | --- | --- |
@@ -387,14 +391,27 @@ Passing its own tests proves that rsp is consistent, not that its rules work on 
 
 What this shows, and what it does not:
 
-- **Findings are rare, as intended.** SWE-bench tasks are small bug fixes, and rsp only speaks when one of its specific facts is true. On the human fixes, every finding is a deliberate skip marker or a test that lost assertions while being rewritten.
-- **The agent findings are the shortcuts rsp is for.** One agent patch deletes the project's whole test file (`test_requests.py`); others add `# type: ignore`, or add parameters to public functions without touching a test. Of the 11 SWE-agent findings, 7 are on patches that did not resolve their task.
+- **Findings are rare, as intended.** SWE-bench tasks are small bug fixes, and RSP only speaks when one of its specific facts is true. On the human fixes, every finding is a deliberate skip marker or a test that lost assertions while being rewritten.
+- **The agent findings are the shortcuts RSP is for.** One agent patch deletes the project's whole test file (`test_requests.py`); others add `# type: ignore`, or add parameters to public functions without touching a test. Of the 11 SWE-agent findings, 7 are on patches that did not resolve their task.
 - **The first run found false facts, now fixed.** Skip markers and imports inside Python strings (pytest's own tests write test code into strings), dependency lists built in `setup.py` variables or imported from another module, `pytest` imported by test files of projects that declare it in tox or conda files, a method defined twice in one class, and a backslash at the end of a docstring line that shifted line numbers. Each became a golden fixture.
 - **It is not a detector of wrong patches.** Most unresolved patches have no finding, because most wrong patches are wrong in ways only tests or a reviewer can see. `tests/delta` with the task's tests would see more, and is not part of this run.
 
+## Security
+
+RSP reads untrusted input, the pull request, and writes to it, so it is built to give that input as little as possible.
+
+- **Least privilege.** The Action needs `contents: read`, plus `pull-requests: write` only for the comment; with `comment: false` it needs no write permission at all. Declare permissions per job and set `permissions: {}` at the top of the workflow.
+- **Text from the diff is inert.** File names, package names, test ids and code quoted in the comment are rendered as code spans or escaped text, so a pull request cannot inject links, images, HTML or @mentions into the report. Annotations and log lines escape workflow command syntax.
+- **Its own comment only.** RSP updates only a comment written by a bot that starts with its marker; a marker pasted by someone else is ignored.
+- **Pull request code runs only when you ask.** Without `test-command`, RSP never executes code from the repository; it reads git objects. With it, see [In the GitHub Action](#in-the-github-action): no tokens in the environment, no step files, workflow commands off, refused on `pull_request_target`, symbolic links ignored when collecting reports.
+- **No network in the rules.** Only the comment step talks to the GitHub API, with the token you give it.
+- **Supply chain.** The Action is a single bundled file (`action-dist/index.js`) that CI rebuilds and compares on every change, with one runtime dependency (`smol-toml`). Pin the Action by commit SHA. The repository's own workflows pin every action by SHA, run with read-only permissions by default, verify npm registry signatures and are scanned by CodeQL; Dependabot keeps them current.
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
 ## Limitations
 
-- **rsp is not a reviewer.** No findings does not mean a change is correct, only that none of these specific things happened.
+- **RSP is not a reviewer.** No findings does not mean a change is correct, only that none of these specific things happened.
 - **Bounded on purpose.** Rules use line-level parsing tuned for precision, not full parsers. Unusual syntax is more likely to be missed than misreported.
 - **Two ecosystems.** Python and JavaScript/TypeScript. CI checks cover GitHub Actions workflows.
 - **Interface changes are about parameters.** Return types, behaviour and class attributes are not compared, and "a test mentions it" is a name match, not coverage.
@@ -403,9 +420,9 @@ What this shows, and what it does not:
 ## FAQ
 
 **Why not use an LLM to review the diff?**
-Because a model's review is an opinion, and it can be confidently wrong in exactly the cases rsp is for. rsp's findings can be checked by anyone in seconds and come out the same on every run. The two are complementary: rsp is cheap enough to run on every push and leaves a model, or a person, free to judge the rest.
+Because a model's review is an opinion, and it can be confidently wrong in exactly the cases RSP is for. RSP's findings can be checked by anyone in seconds and come out the same on every run. The two are complementary: RSP is cheap enough to run on every push and leaves a model, or a person, free to judge the rest.
 
-**Will rsp complain about the existing `# type: ignore` all over my code?**
+**Will RSP complain about the existing `# type: ignore` all over my code?**
 No. Only lines added or changed by the pull request are looked at.
 
 **A finding is correct but we do this on purpose. What now?**
@@ -414,11 +431,11 @@ Add its key to `allow` for that rule in `.rsp.toml`, or exclude the files where 
 **Why is the configuration read from the base commit?**
 So that a pull request cannot switch off the checks that apply to it. Changing `.rsp.toml` is itself a reviewed change.
 
-**Does rsp send my code anywhere?**
+**Does RSP send my code anywhere?**
 No. The rules run locally on the git objects of the repository and use no network. The Action talks only to the GitHub API, to write the comment.
 
 **Does it work with squash merges, rebases and stacked pull requests?**
-rsp compares the head with its merge-base with the base, like GitHub's own pull request diff, so it reports the same changes the pull request shows.
+RSP compares the head with its merge-base with the base, like GitHub's own pull request diff, so it reports the same changes the pull request shows.
 
 **How do I see everything without my configuration?**
 `rsp check --base origin/main --no-config`.

@@ -2,7 +2,8 @@
 // worktree, and collects the JUnit reports it writes. Used by the Action; the
 // tests/delta rule itself only reads the reports.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { git, mergeBase, resolveCommit } from "./git.js";
 import { globToRegExp } from "./glob.js";
@@ -36,7 +37,11 @@ export function runTestsAtBaseAndHead(opts: TestRunOptions): { junitBase: string
       git(opts.repoDir, ["worktree", "add", "--detach", "--force", dir, commit]);
     }
     opts.log(`::group::rsp: tests at ${label} ${commit.slice(0, 12)}${attempt > 0 ? ` (rerun ${attempt})` : ""}`);
-    const res = spawnSync("bash", ["-c", opts.command], { cwd: dir, stdio: ["ignore", "inherit", "inherit"] });
+    // The tests are the pull request's code: they get no tokens or step files, and cannot issue workflow commands.
+    const stop = randomBytes(16).toString("hex");
+    opts.log(`::stop-commands::${stop}`);
+    const res = spawnSync("bash", ["-c", opts.command], { cwd: dir, env: testEnv(process.env), stdio: ["ignore", "inherit", "inherit"] });
+    opts.log(`::${stop}::`);
     opts.log(`::endgroup::`);
     opts.log(`rsp: test command at ${label} exited with ${res.status ?? res.signal}`);
     const found = findFiles(dir, globToRegExp(opts.junit));
@@ -71,13 +76,32 @@ export function runTestsAtBaseAndHead(opts: TestRunOptions): { junitBase: string
   }
 }
 
-/** Files under `root` whose path relative to it matches, sorted; dependencies and .git are skipped. */
+/**
+ * The environment for the test command: the runner's, without the action's
+ * inputs (which include the GitHub token), the runtime tokens of Actions, and
+ * the files through which a step sets outputs, environment and paths for later
+ * steps.
+ */
+export function testEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (/^(INPUT_|ACTIONS_)/.test(key)) continue;
+    if (/^GITHUB_(TOKEN|ENV|OUTPUT|PATH|STATE|STEP_SUMMARY)$/.test(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/** Files under `root` whose path relative to it matches, sorted; dependencies, .git and symbolic links are skipped. */
 function findFiles(root: string, pattern: RegExp, dir = root, out: string[] = []): string[] {
   for (const entry of readdirSync(dir).sort()) {
     if (entry === ".git" || entry === "node_modules" || entry === ".venv") continue;
     const path = join(dir, entry);
     const rel = relative(root, path);
-    if (statSync(path).isDirectory()) findFiles(root, pattern, path, out);
+    const stat = lstatSync(path);
+    // A link written by the tests could point anywhere on the runner.
+    if (stat.isSymbolicLink()) continue;
+    if (stat.isDirectory()) findFiles(root, pattern, path, out);
     else if (pattern.test(rel)) out.push(rel);
   }
   return out;

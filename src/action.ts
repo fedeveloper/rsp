@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { check, ConfigError, toJson, toMarkdown } from "./index.js";
@@ -38,7 +39,18 @@ export async function runAction(env: Env = process.env, fetchImpl: Fetch = fetch
     return 1;
   }
   let junit: { junitBase: string[]; junitHead: string[] } | undefined;
+  if (input("test-command") && env.GITHUB_EVENT_NAME === "pull_request_target") {
+    // pull_request_target runs with a write token and secrets; the test command would run the pull request's code with them.
+    log("::error::test-command runs the pull request's code and is refused on pull_request_target; use the pull_request event.");
+    return 1;
+  }
   if (input("test-command")) {
+    if (persistedCredentials(repoDir)) {
+      log(
+        "::warning::The checkout keeps the token in .git/config, where the test command can read it. " +
+          "Use actions/checkout with persist-credentials: false.",
+      );
+    }
     try {
       junit = runTestsAtBaseAndHead({
         repoDir,
@@ -132,13 +144,28 @@ async function upsertComment(
     const comments = (await request("GET", `/repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`)) as {
       id: number;
       body?: string;
+      user?: { type?: string };
     }[];
-    existing = comments.find((c) => c.body?.includes(COMMENT_MARKER));
+    // Only a bot's comment can be ours; anyone can paste the marker into a comment of their own.
+    existing = comments.find((c) => c.user?.type === "Bot" && c.body?.startsWith(COMMENT_MARKER));
     if (comments.length < 100) break;
   }
 
   if (existing) await request("PATCH", `/repos/${repo}/issues/comments/${existing.id}`, { body });
   else if (hasFindings) await request("POST", `/repos/${repo}/issues/${number}/comments`, { body });
+}
+
+/** Whether actions/checkout left an authorization header in the repository's git config. */
+function persistedCredentials(repoDir: string): boolean {
+  try {
+    return execFileSync("git", ["config", "--local", "--get-regexp", "^http\\..*\\.extraheader$"], {
+      cwd: repoDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() !== "";
+  } catch {
+    return false; // git exits 1 when no key matches
+  }
 }
 
 function annotation(f: Finding): string {
