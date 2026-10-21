@@ -1,0 +1,4 @@
+[
+  {"ruleId": "checks/disabled", "path": ".github/workflows/ci.yml", "message": "Removed CI line running a check (base line 10)", "evidence": "- run: npm test"},
+  {"ruleId": "checks/disabled", "path": ".github/workflows/ci.yml", "line": 10, "message": "Added `|| exit 0` after a command", "evidence": "- run: npx tsc --noEmit || exit 0"}
+]

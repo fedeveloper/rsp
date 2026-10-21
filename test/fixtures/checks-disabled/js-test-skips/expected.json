@@ -1,0 +1,6 @@
+[
+  {"ruleId": "checks/disabled", "path": "src/load.test.ts", "line": 3, "message": "Added focused test (`.only`), which skips the others", "evidence": "describe.only('load', () => {"},
+  {"ruleId": "checks/disabled", "path": "src/load.test.ts", "line": 4, "message": "Added skipped test (`.skip`)", "evidence": "it.skip('parses', () => {"},
+  {"ruleId": "checks/disabled", "path": "src/load.test.ts", "line": 7, "message": "Added skipped test (`x` prefix)", "evidence": "xit('fails', () => {"},
+  {"ruleId": "checks/disabled", "path": "src/load.test.ts", "line": 10, "message": "Added skipped test (`.skip`)", "evidence": "it.skipIf(process.platform === 'win32')('paths', () => {"}
+]

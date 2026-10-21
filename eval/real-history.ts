@@ -68,7 +68,7 @@ const lines: string[] = [
     "The last column checks each line-level finding against git independently of the rules: the line at the " +
     "reported location holds the evidence, and the line occurs more often after the commit than before it.",
   "",
-  "To reproduce, clone each repository with `git clone --depth 250 <url>`, check out the head commit below " +
+  "To reproduce, clone each repository with `git clone --depth 400 <url>`, check out the head commit below " +
     "and run `node --import tsx eval/real-history.ts --commits 100 <dirs>`.",
   "",
   "| Repository | Head commit | Commits checked | Commits with findings | " +
@@ -86,8 +86,12 @@ for (const dir of positionals) {
   const hits: Hit[] = [];
   let checked = 0;
   for (const sha of shas) {
-    const parent = git(dir, ["rev-parse", "--verify", "--quiet", `${sha}^1`]).trim();
-    if (!parent) continue;
+    let parent: string;
+    try {
+      parent = git(dir, ["rev-parse", "--verify", "--quiet", `${sha}^1`]);
+    } catch {
+      continue; // root commit
+    }
     checked++;
     const subject = git(dir, ["log", "-1", "--format=%s", sha]);
     for (const finding of check({ repoDir: dir, base: parent, head: sha }).findings) {

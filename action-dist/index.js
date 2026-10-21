@@ -219,7 +219,7 @@ function buildContext(repoDir, baseRef, headRef, exclude = []) {
 import { createHash } from "node:crypto";
 
 // src/version.ts
-var VERSION = "0.1.0";
+var VERSION = "0.2.0";
 
 // src/engine.ts
 function runRules(ctx, rules, options = []) {
@@ -268,6 +268,211 @@ function cmp(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+// src/rules/js.ts
+var JS_FILE = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts|vue|svelte)$/;
+var STATIC_IMPORTS = [
+  /^\s*import\s+(?:type\s+)?[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/,
+  /^\s*import\s*['"]([^'"]+)['"]/,
+  /^\s*export\s+(?:type\s+)?[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/,
+  // Closing line of a multi-line import or export: `} from "pkg";`
+  /^\s*\}\s*from\s*['"]([^'"]+)['"]/
+];
+var REQUIRE = /(?<![\w.$])require\(\s*['"]([^'"]+)['"]\s*\)/g;
+function importedSpecifiers(line) {
+  if (isCommentLine(line)) return [];
+  const specs = [];
+  for (const re of STATIC_IMPORTS) {
+    const m = re.exec(line);
+    if (m) specs.push(m[1]);
+  }
+  const code2 = blankStrings(line);
+  for (const m of line.matchAll(REQUIRE)) {
+    if (code2.startsWith("require(", m.index)) specs.push(m[1]);
+  }
+  return specs;
+}
+function packageName(spec) {
+  if (/^[./]/.test(spec) || spec.includes(":") || /^[#~$]/.test(spec) || spec.startsWith("@/")) return void 0;
+  const parts = spec.split("/");
+  const name = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+  return /^(@[\w.-]+\/)?[\w.-]+$/.test(name) ? name : void 0;
+}
+function isInTryBlock(lines, index) {
+  let indent = indentation(lines[index] ?? "");
+  for (let i = index - 1; i >= 0 && indent > 0; i--) {
+    const l = lines[i];
+    if (l.trim() === "" || isCommentLine(l)) continue;
+    const ind = indentation(l);
+    if (ind < indent) {
+      if (/^(\}\s*)?(try|catch\b[^{]*)\s*\{\s*$/.test(l.trim())) return true;
+      indent = ind;
+    }
+  }
+  return false;
+}
+var ENV_READS = [
+  /\b(?:process\.env|import\.meta\.env|Bun\.env)\??\.([A-Za-z_][A-Za-z0-9_]*)\b(?!\s*(?:=[^=]|\?\?=|\|\|=|&&=))/g,
+  /\b(?:process\.env|import\.meta\.env|Bun\.env)\??\.?\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\](?!\s*(?:=[^=]|\?\?=|\|\|=|&&=))/g,
+  /\bDeno\.env\.get\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]/g
+];
+var ENV_DESTRUCTURE = /\{([^{}]*)\}\s*=\s*(?:process\.env|import\.meta\.env|Bun\.env)\b/;
+var VITE_BUILTINS = /* @__PURE__ */ new Set(["MODE", "BASE_URL", "PROD", "DEV", "SSR"]);
+function envVarReads(line) {
+  if (isCommentLine(line)) return [];
+  const code2 = line.replace(/\/\/.*$/, "");
+  const blank = blankStrings(code2);
+  const names = [];
+  for (const re of ENV_READS) {
+    for (const m of code2.matchAll(re)) {
+      if (blank.startsWith(m[0].slice(0, 4), m.index)) names.push(m[1]);
+    }
+  }
+  const d = ENV_DESTRUCTURE.exec(blank);
+  if (d) {
+    for (const part of d[1].split(",")) {
+      const name = /^\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(part)?.[1];
+      if (name) names.push(name);
+    }
+  }
+  return code2.includes("import.meta.env") ? names.filter((n) => !VITE_BUILTINS.has(n)) : names;
+}
+function nonCodeLines(text) {
+  const result = /* @__PURE__ */ new Set();
+  const stack = [];
+  let state = "code";
+  let inClass = false;
+  let prev;
+  let line = 1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const top = stack[stack.length - 1];
+    if (c === "\n") {
+      line++;
+      if (state === "line-comment" || state === "'" || state === '"' || state === "regex") state = "code";
+      if (state === "block-comment" || state === "code" && top === "template") result.add(line);
+      continue;
+    }
+    if (state === "line-comment") continue;
+    if (state === "block-comment") {
+      if (c === "*" && text[i + 1] === "/") {
+        state = "code";
+        i++;
+      }
+      continue;
+    }
+    if (state === "'" || state === '"') {
+      if (c === "\\") i++;
+      else if (c === state) {
+        state = "code";
+        prev = "a";
+      }
+      continue;
+    }
+    if (state === "regex") {
+      if (c === "\\") i++;
+      else if (c === "[") inClass = true;
+      else if (c === "]") inClass = false;
+      else if (c === "/" && !inClass) {
+        state = "code";
+        prev = "a";
+      }
+      continue;
+    }
+    if (top === "template") {
+      if (c === "\\") i++;
+      else if (c === "`") {
+        stack.pop();
+        prev = "a";
+      } else if (c === "$" && text[i + 1] === "{") {
+        stack.push(0);
+        prev = "{";
+        i++;
+      }
+      continue;
+    }
+    if (/\s/.test(c)) continue;
+    if (c === "/" && text[i + 1] === "/") state = "line-comment";
+    else if (c === "/" && text[i + 1] === "*") {
+      state = "block-comment";
+      i++;
+    } else if (c === "/" && startsRegex(text, i, prev)) {
+      state = "regex";
+      inClass = false;
+    } else if (c === "'" || c === '"') state = c;
+    else if (c === "`") stack.push("template");
+    else if (typeof top === "number" && c === "{") stack[stack.length - 1] = top + 1;
+    else if (typeof top === "number" && c === "}") {
+      if (top === 0) stack.pop();
+      else stack[stack.length - 1] = top - 1;
+    }
+    if (state === "code" && c !== "`") prev = c;
+  }
+  return result;
+}
+var BEFORE_REGEX_WORDS = /* @__PURE__ */ new Set([
+  "return",
+  "typeof",
+  "case",
+  "do",
+  "else",
+  "in",
+  "of",
+  "void",
+  "yield",
+  "await",
+  "delete",
+  "instanceof",
+  "new"
+]);
+function startsRegex(text, index, prev) {
+  if (prev === void 0 || "(,=:[!&|?{};+-*%<>~^".includes(prev)) return true;
+  if (!/[\w$]/.test(prev)) return false;
+  const word = /([\w$]+)\s*$/.exec(text.slice(Math.max(0, index - 20), index))?.[1];
+  return word !== void 0 && BEFORE_REGEX_WORDS.has(word);
+}
+function blankStrings(line) {
+  let out = "";
+  let quote;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === "\\") {
+        out += "  ";
+        i++;
+      } else if (c === quote) {
+        out += c;
+        quote = void 0;
+      } else if (quote === "`" && c === "$" && line[i + 1] === "{") {
+        const end = closingBrace(line, i + 2);
+        out += line.slice(i, end + 1);
+        i = end;
+      } else {
+        out += " ";
+      }
+    } else if (c === "/" && (line[i + 1] === "/" || line[i + 1] === "*")) {
+      return out + line.slice(i);
+    } else {
+      if (c === "'" || c === '"' || c === "`") quote = c;
+      out += c;
+    }
+  }
+  return out;
+}
+function closingBrace(line, from) {
+  let depth = 0;
+  for (let i = from; i < line.length; i++) {
+    if (line[i] === "{") depth++;
+    else if (line[i] === "}" && depth-- === 0) return i;
+  }
+  return line.length - 1;
+}
+function isCommentLine(line) {
+  return /^\s*(\/\/|\/\*|\*)/.test(line);
+}
+function indentation(line) {
+  return line.length - line.trimStart().length;
+}
+
 // src/rules/checks-disabled.ts
 var PYTHON_PATTERNS = [
   { label: "pytest skip marker", regex: /@pytest\.mark\.skip(if)?\b/ },
@@ -280,33 +485,100 @@ var PYTHON_PATTERNS = [
   { label: "coverage exclusion", regex: /#\s*pragma:\s*no\s*cover\b/ },
   { label: "bandit nosec comment", regex: /#\s*nosec\b/ }
 ];
+var JS_PATTERNS = [
+  { label: "eslint-disable comment", regex: /(\/\/|\/\*)\s*(eslint|oxlint)-disable\b/ },
+  { label: "@ts-ignore comment", regex: /(\/\/|\/\*)\s*@ts-ignore\b/ },
+  { label: "@ts-nocheck comment", regex: /(\/\/|\/\*)\s*@ts-nocheck\b/ },
+  { label: "@ts-expect-error comment", regex: /(\/\/|\/\*)\s*@ts-expect-error\b/ },
+  { label: "biome-ignore comment", regex: /(\/\/|\/\*)\s*biome-ignore\b/ },
+  { label: "coverage exclusion", regex: /(\/\/|\/\*)\s*(istanbul|c8|v8)\s+ignore\b/ }
+];
+var JS_TEST_PATTERNS = [
+  { label: "skipped test (`.skip`)", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.(skip|skipIf|fixme)\b/ },
+  { label: "focused test (`.only`), which skips the others", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.only\b/ },
+  { label: "skipped test (`x` prefix)", regex: /(^|[^\w.$])x(describe|it|test|context)\s*\(/ }
+];
 var WORKFLOW_PATTERNS = [
   { label: "continue-on-error: true", regex: /^\s*continue-on-error:\s*true\b/ },
   { label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
+  { label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ },
   { label: "step or job disabled with `if: false`", regex: /^\s*-?\s*if:\s*(false|\$\{\{\s*false\s*\}\})\s*$/ }
 ];
 var TEST_CONFIG_PATTERNS = [
   { label: "pytest option that excludes tests", regex: /--deselect\b|--ignore(-glob)?\b|(^|\s)-p\s+no:/ }
 ];
-var CHECK_COMMAND = /\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest)\b/;
+var PACKAGE_JSON_PATTERNS = [
+  { label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
+  { label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ }
+];
+var TSCONFIG_PATTERNS = [
+  {
+    label: "TypeScript check turned off",
+    regex: /"(strict|noImplicitAny|strictNullChecks|strictFunctionTypes|strictBindCallApply|noImplicitThis|alwaysStrict|noImplicitReturns|noUnusedLocals|noUnusedParameters|noUncheckedIndexedAccess|noFallthroughCasesInSwitch)"\s*:\s*false\b/
+  }
+];
+var ESLINT_CONFIG_PATTERNS = [
+  { label: "ESLint rule turned off", regex: /['"]?[\w@/-]+['"]?\s*:\s*\[?\s*(['"]off['"]|0\s*[,\]}]|0\s*$)/ }
+];
+var CHECK_KIND = {
+  pytest: "test",
+  unittest: "test",
+  tox: "test",
+  nox: "test",
+  jest: "test",
+  vitest: "test",
+  mocha: "test",
+  ava: "test",
+  playwright: "test",
+  cypress: "test",
+  "test script": "test",
+  ruff: "lint",
+  flake8: "lint",
+  pylint: "lint",
+  eslint: "lint",
+  oxlint: "lint",
+  biome: "lint",
+  "lint script": "lint",
+  mypy: "types",
+  pyright: "types",
+  tsc: "types",
+  "typecheck script": "types",
+  "type-check script": "types",
+  black: "format",
+  isort: "format",
+  prettier: "format"
+};
+var CHECK_COMMAND = new RegExp(
+  "\\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome)\\b|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b"
+);
 var CHECK_COMMAND_ALL = new RegExp(CHECK_COMMAND.source, "g");
 var COVERAGE_THRESHOLD = /(?:fail_under|fail-under|--cov-fail-under)\s*[=:]?\s*["']?(\d+(?:\.\d+)?)/;
-var ASSERTION = /^\s*assert\b|\bself\.assert[A-Z]\w*\(|\bpytest\.raises\(/;
+var PYTHON_ASSERTION = /^\s*assert\b|\bself\.assert[A-Z]\w*\(|\bpytest\.raises\(/;
+var JS_ASSERTION = /\bexpect\(|(^|[^\w.$])assert(\.\w+)?\(|\bt\.(is|not|deepEqual|true|false|throws|equal|ok)\(/;
 var PYTHON_TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/;
+var JS_TEST_NAME = /\.(test|spec|e2e|test-d|tst)\.[cm]?[jt]sx?$/;
+var JS_TEST_DIR = /(^|\/)(__tests__|tests?|e2e|cypress|spec)\/.*\.[cm]?[jt]sx?$/;
+var JS_TEST_CALL = /(^|[^\w.$])(describe|it|test)\s*\(/;
 var WORKFLOW_FILE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 var TEST_CONFIG_FILE = /(^|\/)(pyproject\.toml|setup\.cfg|pytest\.ini|tox\.ini|\.coveragerc)$/;
+var TSCONFIG_FILE = /(^|\/)[jt]sconfig[\w.-]*\.json$/;
+var ESLINT_CONFIG_FILE = /(^|\/)(eslint\.config\.[cm]?[jt]s|\.eslintrc(\.(json|js|cjs|yml|yaml))?)$/;
 var checksDisabled = {
   id: "checks/disabled",
-  version: "0.2.0",
-  description: "Checks that were removed or switched off: deleted test files, fewer assertions, skip markers, lint and type suppressions, CI steps removed or allowed to fail, lower coverage thresholds.",
+  version: "0.3.0",
+  description: "Checks that were removed or switched off: deleted test files, fewer assertions, skip markers, lint and type suppressions, CI steps or package.json scripts removed or allowed to fail, lower coverage thresholds, TypeScript and ESLint checks turned off.",
   run(ctx) {
     const findings = [];
-    const removedPython = multiset(ctx.files.filter((f) => f.path.endsWith(".py") || f.oldPath.endsWith(".py")), "del");
+    const removedSource = multiset(ctx.files.filter((f) => isSource(f.path) || isSource(f.oldPath)), "del");
     for (const file of ctx.files) {
       if (file.binary) continue;
-      if (file.path.endsWith(".py")) findings.push(...pythonFile(file, removedPython));
+      if (file.path.endsWith(".py")) findings.push(...pythonFile(file, removedSource));
+      if (JS_FILE.test(file.path)) findings.push(...jsFile(ctx, file, removedSource));
       if (WORKFLOW_FILE.test(file.path)) findings.push(...workflowFile(file));
       if (TEST_CONFIG_FILE.test(file.path)) findings.push(...testConfigFile(ctx, file));
+      if (file.path.split("/").pop() === "package.json") findings.push(...packageJsonFile(ctx, file));
+      if (TSCONFIG_FILE.test(file.path)) findings.push(...matchAdded(file, TSCONFIG_PATTERNS));
+      if (ESLINT_CONFIG_FILE.test(file.path)) findings.push(...matchAdded(file, ESLINT_CONFIG_PATTERNS));
     }
     findings.push(...fewerAssertions(ctx));
     return findings;
@@ -318,14 +590,58 @@ function pythonFile(file, removed) {
   }
   return matchAdded(file, PYTHON_PATTERNS, removed);
 }
+function jsFile(ctx, file, removed) {
+  if (file.status === "deleted") {
+    return isJsTestFile(file.path, ctx.readBase(file.path)) ? [{ message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }] : [];
+  }
+  const inTests = JS_TEST_NAME.test(file.path) || JS_TEST_DIR.test(file.path);
+  const patterns = inTests ? [...JS_PATTERNS.filter((p) => !p.label.startsWith("@ts-expect-error")), ...JS_TEST_PATTERNS] : JS_PATTERNS;
+  const nonCode = nonCodeLines(ctx.readHead(file.path) ?? "");
+  return matchAdded(file, patterns, removed, (l) => nonCode.has(l.newLine) ? "" : blankStrings(l.text));
+}
+function packageJsonFile(ctx, file) {
+  const findings = matchAdded(file, PACKAGE_JSON_PATTERNS);
+  if (file.status === "deleted") return findings;
+  const before = scripts(ctx.readBase(file.oldPath));
+  const after = scripts(ctx.readHead(file.path));
+  if (!before || !after) return findings;
+  const stillRun = new Set(Object.values(after).flatMap(checkCommands).map(kind));
+  const lines = (ctx.readHead(file.path) ?? "").split("\n");
+  for (const [name, command] of Object.entries(before)) {
+    const lost = checkCommands(command).filter((c) => !stillRun.has(kind(c)));
+    if (lost.length === 0) continue;
+    const now = after[name];
+    const index = lines.findIndex((l) => l.trimStart().startsWith(`${JSON.stringify(name)}:`));
+    findings.push(
+      now === void 0 ? {
+        message: `Removed package.json script \`${name}\`, which ran ${lost.map((c) => `\`${c}\``).join(", ")}`,
+        locations: [{ path: file.path }],
+        evidence: `"${name}": ${JSON.stringify(command)}`
+      } : {
+        message: `package.json script \`${name}\` no longer runs ${lost.map((c) => `\`${c}\``).join(", ")}`,
+        locations: [{ path: file.path, line: index >= 0 ? index + 1 : void 0 }],
+        evidence: index >= 0 ? lines[index].trim() : `"${name}": ${JSON.stringify(now)}`
+      }
+    );
+  }
+  return findings;
+}
+function scripts(text) {
+  try {
+    const json = JSON.parse(text ?? "");
+    return Object.fromEntries(Object.entries(json.scripts ?? {}).filter((e) => typeof e[1] === "string"));
+  } catch {
+    return void 0;
+  }
+}
 function fewerAssertions(ctx) {
   const tests = ctx.files.filter(
-    (f) => !f.binary && (PYTHON_TEST_FILE.test(f.path) || PYTHON_TEST_FILE.test(f.oldPath))
+    (f) => !f.binary && (isTestFile(f.path, ctx.readHead(f.path)) || isTestFile(f.oldPath, ctx.readBase(f.oldPath)))
   );
   const counts = tests.map((f) => ({
     file: f,
-    before: f.status === "added" ? 0 : countAssertions(ctx.readBase(f.oldPath)),
-    after: f.status === "deleted" ? 0 : countAssertions(ctx.readHead(f.path))
+    before: f.status === "added" ? 0 : countAssertions(f.oldPath, ctx.readBase(f.oldPath)),
+    after: f.status === "deleted" ? 0 : countAssertions(f.path, ctx.readHead(f.path))
   }));
   const total = (k) => counts.reduce((n, c) => n + c[k], 0);
   if (total("after") >= total("before")) return [];
@@ -337,13 +653,13 @@ function fewerAssertions(ctx) {
 }
 function workflowFile(file) {
   const findings = matchAdded(file, WORKFLOW_PATTERNS);
-  const addedCommands = new Set(
-    file.lines.filter((l) => l.kind === "add").flatMap((l) => l.text.match(CHECK_COMMAND_ALL) ?? [])
+  const addedKinds = new Set(
+    file.lines.filter((l) => l.kind === "add").flatMap((l) => checkCommands(l.text).map(kind))
   );
   for (const l of file.lines) {
     if (l.kind !== "del") continue;
-    const command = isShellLine(l.text) ? CHECK_COMMAND.exec(l.text)?.[1] : void 0;
-    if (!command || addedCommands.has(command)) continue;
+    const command = isShellLine(l.text) ? checkCommands(l.text)[0] : void 0;
+    if (!command || addedKinds.has(kind(command))) continue;
     const what = file.status === "deleted" ? "Workflow running a check deleted" : "Removed CI line running a check";
     findings.push({
       // Removed lines exist only in base, so the line number is given as a base line.
@@ -368,12 +684,12 @@ function testConfigFile(ctx, file) {
   }
   return findings;
 }
-function matchAdded(file, patterns, removed = multiset([file], "del")) {
+function matchAdded(file, patterns, removed = multiset([file], "del"), code2 = (l) => l.text) {
   const findings = [];
   for (const l of file.lines) {
     if (l.kind !== "add" || take(removed, l.text.trim())) continue;
     for (const p of patterns) {
-      if (p.regex.test(l.text)) {
+      if (p.regex.test(code2(l))) {
         findings.push({
           message: `Added ${p.label}`,
           locations: [{ path: file.path, line: l.newLine }],
@@ -388,10 +704,25 @@ function isShellLine(line) {
   if (/^\s*(-\s*)?run:/.test(line)) return true;
   return !/^\s*(-\s*)?([\w-]+\s*:|[{[])/.test(line);
 }
-function multiset(files, kind) {
+function checkCommands(line) {
+  return [...line.matchAll(CHECK_COMMAND_ALL)].map((m) => m[1] ?? `${m[2]} script`);
+}
+function isSource(path) {
+  return path.endsWith(".py") || JS_FILE.test(path);
+}
+function kind(command) {
+  return CHECK_KIND[command] ?? command;
+}
+function isTestFile(path, text) {
+  return PYTHON_TEST_FILE.test(path) || isJsTestFile(path, text);
+}
+function isJsTestFile(path, text) {
+  return JS_TEST_NAME.test(path) || JS_TEST_DIR.test(path) && JS_TEST_CALL.test(text ?? "");
+}
+function multiset(files, kind2) {
   const m = /* @__PURE__ */ new Map();
   for (const f of files) {
-    for (const l of f.lines) if (l.kind === kind) m.set(l.text.trim(), (m.get(l.text.trim()) ?? 0) + 1);
+    for (const l of f.lines) if (l.kind === kind2) m.set(l.text.trim(), (m.get(l.text.trim()) ?? 0) + 1);
   }
   return m;
 }
@@ -400,12 +731,119 @@ function take(m, text) {
   if (n > 0) m.set(text, n - 1);
   return n > 0;
 }
-function countAssertions(text) {
-  return (text ?? "").split("\n").filter((l) => ASSERTION.test(l)).length;
+function countAssertions(path, text) {
+  const assertion = path.endsWith(".py") ? PYTHON_ASSERTION : JS_ASSERTION;
+  return (text ?? "").split("\n").filter((l) => assertion.test(l)).length;
 }
 function threshold(text) {
   const m = COVERAGE_THRESHOLD.exec(text ?? "");
   return m ? Number(m[1]) : void 0;
+}
+
+// src/rules/js-builtins.ts
+var NODE_BUILTINS = /* @__PURE__ */ new Set([
+  "_http_agent",
+  "_http_client",
+  "_http_common",
+  "_http_incoming",
+  "_http_outgoing",
+  "_http_server",
+  "_stream_duplex",
+  "_stream_passthrough",
+  "_stream_readable",
+  "_stream_transform",
+  "_stream_wrap",
+  "_stream_writable",
+  "_tls_common",
+  "_tls_wrap",
+  "assert",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "domain",
+  "events",
+  "fs",
+  "http",
+  "http2",
+  "https",
+  "inspector",
+  "module",
+  "net",
+  "os",
+  "path",
+  "perf_hooks",
+  "process",
+  "punycode",
+  "querystring",
+  "readline",
+  "repl",
+  "stream",
+  "string_decoder",
+  "sys",
+  "timers",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib"
+]);
+
+// src/rules/js-manifests.ts
+var DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+function jsManifests(ctx) {
+  const packages = [];
+  const local = /* @__PURE__ */ new Set();
+  const aliases = [];
+  for (const path of ctx.listHead()) {
+    const base = path.split("/").pop();
+    if (base === "package.json") {
+      const json = parseJson(ctx.readHead(path));
+      if (!json) continue;
+      const names = /* @__PURE__ */ new Set();
+      for (const field of DEPENDENCY_FIELDS) {
+        const deps = json[field];
+        if (deps && typeof deps === "object") Object.keys(deps).forEach((n) => names.add(n));
+      }
+      if (typeof json.name === "string") {
+        names.add(json.name);
+        local.add(json.name);
+      }
+      packages.push({ path, dir: path.slice(0, -base.length), names });
+    } else if (/^[jt]sconfig[\w.-]*\.json$/.test(base)) {
+      aliases.push(...pathAliases(ctx.readHead(path) ?? ""));
+    }
+  }
+  return {
+    forFile: (file) => packages.filter((p) => file.startsWith(p.dir)).sort((a, b) => b.dir.length - a.dir.length),
+    local,
+    aliases
+  };
+}
+function parseJson(text) {
+  try {
+    const value = JSON.parse(text ?? "");
+    return value && typeof value === "object" ? value : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function pathAliases(text) {
+  const at = text.search(/"paths"\s*:\s*\{/);
+  if (at < 0) return [];
+  const body = text.slice(text.indexOf("{", at) + 1, text.indexOf("}", at));
+  return [...body.matchAll(/"([^"]+)"\s*:\s*\[/g)].map((m) => m[1].replace(/\*$/, ""));
 }
 
 // src/rules/python.ts
@@ -421,11 +859,11 @@ function importedModules(line) {
 }
 function enclosingHeaders(lines, index) {
   const headers = [];
-  let indent = indentation(lines[index] ?? "");
+  let indent = indentation2(lines[index] ?? "");
   for (let i = index - 1; i >= 0 && indent > 0; i--) {
     const l = lines[i];
     if (l.trim() === "" || l.trim().startsWith("#")) continue;
-    const ind = indentation(l);
+    const ind = indentation2(l);
     if (ind < indent) {
       headers.push({ index: i, text: l.trim() });
       indent = ind;
@@ -441,10 +879,10 @@ function isGuardedImport(lines, index) {
 }
 function isTryElse(lines, header) {
   if (!/^else\s*:/.test(header.text)) return false;
-  const indent = indentation(lines[header.index]);
+  const indent = indentation2(lines[header.index]);
   for (let i = header.index - 1; i >= 0; i--) {
     const l = lines[i];
-    if (l.trim() === "" || indentation(l) > indent) continue;
+    if (l.trim() === "" || indentation2(l) > indent) continue;
     return /^except\b/.test(l.trim());
   }
   return false;
@@ -456,15 +894,15 @@ function optionalModules(lines) {
   });
   return names;
 }
-var ENV_READS = [
+var ENV_READS2 = [
   /\b(?:os\.)?getenv\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
   /\b(?:os\.)?environ\.get\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
   /\b(?:os\.)?environ\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\](?!\s*=[^=])/g
 ];
-function envVarReads(line) {
+function envVarReads2(line) {
   const code2 = stripComment(line);
   const names = [];
-  for (const re of ENV_READS) {
+  for (const re of ENV_READS2) {
     for (const m of code2.matchAll(re)) names.push(m[1]);
   }
   return names;
@@ -472,7 +910,7 @@ function envVarReads(line) {
 function normalizeDist(name) {
   return name.toLowerCase().replace(/[-_.]+/g, "-");
 }
-function indentation(line) {
+function indentation2(line) {
   return line.length - line.trimStart().length;
 }
 function stripComment(line) {
@@ -1695,34 +2133,71 @@ var KNOWN_DISTRIBUTIONS = {
 };
 var depsUndeclared = {
   id: "deps/undeclared",
-  version: "0.1.0",
-  description: "Python imports added in the diff whose package is not declared in any dependency manifest.",
+  version: "0.2.0",
+  description: "Python and JavaScript/TypeScript imports added in the diff whose package is not declared in a dependency manifest.",
   run(ctx) {
-    const pyFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && f.path.endsWith(".py"));
-    if (pyFiles.length === 0) return [];
-    const declared = declaredDependencies(ctx);
-    if (declared.manifests.length === 0) return [];
-    const local = localModules(ctx.listHead());
-    const where2 = declared.manifests.length <= 3 ? declared.manifests.join(", ") : `any of ${declared.manifests.length} dependency manifests`;
-    const findings = [];
-    for (const file of pyFiles) {
-      const optional = optionalModules((ctx.readHead(file.path) ?? "").split("\n"));
-      for (const l of file.lines) {
-        if (l.kind !== "add") continue;
-        for (const mod of importedModules(l.text)) {
-          if (PYTHON_STDLIB.has(mod) || local.has(mod) || optional.has(mod)) continue;
-          if (candidates(mod).some((c) => declared.names.has(c))) continue;
-          findings.push({
-            message: `Imports \`${mod}\`, not declared in ${where2}`,
-            locations: [{ path: file.path, line: l.newLine }],
-            evidence: l.text.trim()
-          });
-        }
-      }
-    }
-    return findings;
+    return [...python(ctx), ...javascript(ctx)];
   }
 };
+function python(ctx) {
+  const pyFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && f.path.endsWith(".py"));
+  if (pyFiles.length === 0) return [];
+  const declared = declaredDependencies(ctx);
+  if (declared.manifests.length === 0) return [];
+  const local = localModules(ctx.listHead());
+  const where2 = declared.manifests.length <= 3 ? declared.manifests.join(", ") : `any of ${declared.manifests.length} dependency manifests`;
+  const findings = [];
+  for (const file of pyFiles) {
+    const optional = optionalModules((ctx.readHead(file.path) ?? "").split("\n"));
+    for (const l of file.lines) {
+      if (l.kind !== "add") continue;
+      for (const mod of importedModules(l.text)) {
+        if (PYTHON_STDLIB.has(mod) || local.has(mod) || optional.has(mod)) continue;
+        if (candidates(mod).some((c) => declared.names.has(c))) continue;
+        findings.push({
+          message: `Imports \`${mod}\`, not declared in ${where2}`,
+          locations: [{ path: file.path, line: l.newLine }],
+          evidence: l.text.trim()
+        });
+      }
+    }
+  }
+  return findings;
+}
+function javascript(ctx) {
+  const jsFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && JS_FILE.test(f.path));
+  if (jsFiles.length === 0) return [];
+  const manifests = jsManifests(ctx);
+  const local = localModules(ctx.listHead());
+  const findings = [];
+  for (const file of jsFiles) {
+    const packages = manifests.forFile(file.path);
+    if (packages.length === 0) continue;
+    const text = ctx.readHead(file.path) ?? "";
+    const lines = text.split("\n");
+    const nonCode = nonCodeLines(text);
+    const where2 = packages.slice(0, 3).map((p) => p.path).join(", ");
+    for (const l of file.lines) {
+      if (l.kind !== "add" || nonCode.has(l.newLine)) continue;
+      for (const spec of importedSpecifiers(l.text)) {
+        const name = packageName(spec);
+        if (!name || NODE_BUILTINS.has(name) || NODE_BUILTINS.has(spec) || local.has(name)) continue;
+        if (manifests.local.has(name) || manifests.aliases.some((a) => spec === a || a.endsWith("/") && spec.startsWith(a))) continue;
+        if (packages.some((p) => p.names.has(name) || p.names.has(typesPackage(name)))) continue;
+        if (isInTryBlock(lines, l.newLine - 1)) continue;
+        findings.push({
+          message: `Imports \`${name}\`, not declared in ${where2}`,
+          locations: [{ path: file.path, line: l.newLine }],
+          evidence: l.text.trim()
+        });
+      }
+    }
+  }
+  return findings;
+}
+function typesPackage(name) {
+  return `@types/${name.startsWith("@") ? name.slice(1).replace("/", "__") : name}`;
+}
 function candidates(mod) {
   const n = normalizeDist(mod);
   return [n, `python-${n}`, `py${n}`, ...KNOWN_DISTRIBUTIONS[mod] ?? []].map(normalizeDist);
@@ -1735,20 +2210,30 @@ function localModules(paths) {
     parts.forEach((d) => names.add(d));
     if (file.endsWith(".py")) names.add(file.slice(0, -3));
     if (file.endsWith(".pyi")) names.add(file.slice(0, -4));
+    const js = /^(.+)\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/.exec(file);
+    if (js) names.add(js[1]);
   }
   return names;
 }
 
 // src/rules/env-missing-example.ts
-var EXAMPLE_FILE = /(^|\/)(\.env[._-](example|sample|template|dist|defaults)|env\.example|example\.env|sample\.env)$/i;
+var EXAMPLE_FILE = /(^|\/)(\.env(\.[\w-]+)*[._-](example|sample|template|dist|defaults)|env\.example|example\.env|sample\.env)$/i;
 var EXAMPLE_KEY = /^\s*#?\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
 var STANDARD = /* @__PURE__ */ new Set([
   "CI",
+  "DEBUG",
+  "FORCE_COLOR",
   "HOME",
   "HOSTNAME",
   "LANG",
   "LANGUAGE",
   "LOGNAME",
+  "NO_COLOR",
+  "NODE_DEBUG",
+  "NODE_ENV",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_OPTIONS",
+  "NODE_TLS_REJECT_UNAUTHORIZED",
   "PATH",
   "PWD",
   "PYTHONHASHSEED",
@@ -1762,14 +2247,14 @@ var STANDARD = /* @__PURE__ */ new Set([
   "USER",
   "VIRTUAL_ENV"
 ]);
-var STANDARD_PREFIXES = ["GITHUB_", "RUNNER_", "LC_"];
+var STANDARD_PREFIXES = ["GITHUB_", "RUNNER_", "LC_", "npm_"];
 var envMissingExample = {
   id: "env/missing-example",
-  version: "0.1.0",
-  description: "Environment variables read in added Python code but missing from the example env file.",
+  version: "0.2.0",
+  description: "Environment variables read in added Python or JavaScript/TypeScript code but missing from the example env file.",
   run(ctx) {
-    const pyFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && f.path.endsWith(".py"));
-    if (pyFiles.length === 0) return [];
+    const sources = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && envReader(f.path));
+    if (sources.length === 0) return [];
     const examples = ctx.listHead().filter((p) => EXAMPLE_FILE.test(p));
     if (examples.length === 0) return [];
     const documented = /* @__PURE__ */ new Set();
@@ -1779,17 +2264,23 @@ var envMissingExample = {
         if (m) documented.add(m[1]);
       }
     }
+    const where2 = examples.length <= 3 ? examples.join(", ") : `any of ${examples.length} example env files`;
     const removedReads = new Set(
-      ctx.files.flatMap((f) => f.lines.filter((l) => l.kind === "del").flatMap((l) => envVarReads(l.text)))
+      ctx.files.flatMap((f) => {
+        const read = envReader(f.oldPath);
+        return read ? f.lines.filter((l) => l.kind === "del").flatMap((l) => read(l.text)) : [];
+      })
     );
     const findings = [];
-    for (const file of pyFiles) {
+    for (const file of sources) {
+      const read = envReader(file.path);
+      const nonCode = JS_FILE.test(file.path) ? nonCodeLines(ctx.readHead(file.path) ?? "") : /* @__PURE__ */ new Set();
       for (const l of file.lines) {
-        if (l.kind !== "add") continue;
-        for (const name of new Set(envVarReads(l.text))) {
+        if (l.kind !== "add" || nonCode.has(l.newLine)) continue;
+        for (const name of new Set(read(l.text))) {
           if (documented.has(name) || removedReads.has(name) || isStandard(name)) continue;
           findings.push({
-            message: `Reads environment variable \`${name}\`, missing from ${examples.join(", ")}`,
+            message: `Reads environment variable \`${name}\`, missing from ${where2}`,
             locations: [{ path: file.path, line: l.newLine }],
             evidence: l.text.trim()
           });
@@ -1801,6 +2292,11 @@ var envMissingExample = {
 };
 function isStandard(name) {
   return STANDARD.has(name) || STANDARD_PREFIXES.some((p) => name.startsWith(p));
+}
+function envReader(path) {
+  if (path.endsWith(".py")) return envVarReads2;
+  if (JS_FILE.test(path)) return envVarReads;
+  return void 0;
 }
 
 // src/rules/index.ts

@@ -1,0 +1,3 @@
+[
+  {"ruleId": "deps/undeclared", "path": "packages/b/index.ts", "line": 5, "message": "Imports `lodash`, not declared in packages/b/package.json, package.json", "evidence": "} from 'lodash';"}
+]

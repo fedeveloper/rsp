@@ -1,0 +1,5 @@
+[
+  {"ruleId": "checks/disabled", "path": "eslint.config.js", "line": 5, "message": "Added ESLint rule turned off", "evidence": "'@typescript-eslint/no-explicit-any': 'off',"},
+  {"ruleId": "checks/disabled", "path": "eslint.config.js", "line": 6, "message": "Added ESLint rule turned off", "evidence": "'no-unused-vars': ['off'],"},
+  {"ruleId": "checks/disabled", "path": "tsconfig.json", "line": 3, "message": "Added TypeScript check turned off", "evidence": "\"strict\": false,"}
+]

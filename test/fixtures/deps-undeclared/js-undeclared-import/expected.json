@@ -1,0 +1,5 @@
+[
+  {"ruleId": "deps/undeclared", "path": "src/app.js", "line": 2, "message": "Imports `axios`, not declared in package.json", "evidence": "import axios from 'axios';"},
+  {"ruleId": "deps/undeclared", "path": "src/app.js", "line": 6, "message": "Imports `dotenv`, not declared in package.json", "evidence": "import 'dotenv/config';"},
+  {"ruleId": "deps/undeclared", "path": "src/app.js", "line": 7, "message": "Imports `node-cron`, not declared in package.json", "evidence": "const cron = require('node-cron');"}
+]

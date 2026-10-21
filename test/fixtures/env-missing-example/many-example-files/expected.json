@@ -1,0 +1,3 @@
+[
+  {"ruleId": "env/missing-example", "path": "api/index.js", "line": 2, "message": "Reads environment variable `AWS_REGION`, missing from any of 4 example env files", "evidence": "export const region = process.env.AWS_REGION;"}
+]

@@ -1,0 +1,8 @@
+[
+  {"ruleId": "checks/disabled", "path": "src/load.ts", "line": 1, "message": "Added @ts-nocheck comment", "evidence": "// @ts-nocheck"},
+  {"ruleId": "checks/disabled", "path": "src/load.ts", "line": 3, "message": "Added eslint-disable comment", "evidence": "// eslint-disable-next-line @typescript-eslint/no-unsafe-return"},
+  {"ruleId": "checks/disabled", "path": "src/load.ts", "line": 4, "message": "Added @ts-ignore comment", "evidence": "return JSON.parse(data); // @ts-ignore"},
+  {"ruleId": "checks/disabled", "path": "src/load.ts", "line": 6, "message": "Added coverage exclusion", "evidence": "/* istanbul ignore next */"},
+  {"ruleId": "checks/disabled", "path": "src/load.ts", "line": 8, "message": "Added @ts-expect-error comment", "evidence": "// @ts-expect-error legacy"},
+  {"ruleId": "checks/disabled", "path": "src/load.ts", "line": 9, "message": "Added biome-ignore comment", "evidence": "// biome-ignore lint/suspicious/noConsole: debugging"}
+]

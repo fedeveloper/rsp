@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "src/csv.js", "line": 9, "message": "Added @ts-ignore comment", "evidence": "// @ts-ignore"}
+]
