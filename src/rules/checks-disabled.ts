@@ -101,7 +101,7 @@ function workflowFile(file: FileChange): RawFinding[] {
   );
   for (const l of file.lines) {
     if (l.kind !== "del") continue;
-    const command = CHECK_COMMAND.exec(l.text)?.[1];
+    const command = isShellLine(l.text) ? CHECK_COMMAND.exec(l.text)?.[1] : undefined;
     if (!command || addedCommands.has(command)) continue;
     const what = file.status === "deleted" ? "Workflow running a check deleted" : "Removed CI line running a check";
     findings.push({
@@ -148,6 +148,15 @@ function matchAdded(file: FileChange, patterns: Pattern[], removed = multiset([f
     }
   }
   return findings;
+}
+
+/**
+ * A `run:` line or a line of a multi-line `run: |` block. YAML keys and flow
+ * mappings (a matrix entry such as `- {python: '3.13', tox: py313}`) are not.
+ */
+function isShellLine(line: string): boolean {
+  if (/^\s*(-\s*)?run:/.test(line)) return true;
+  return !/^\s*(-\s*)?([\w-]+\s*:|[{[])/.test(line);
 }
 
 function multiset(files: FileChange[], kind: "add" | "del"): Map<string, number> {

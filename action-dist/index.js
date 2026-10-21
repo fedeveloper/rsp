@@ -342,7 +342,7 @@ function workflowFile(file) {
   );
   for (const l of file.lines) {
     if (l.kind !== "del") continue;
-    const command = CHECK_COMMAND.exec(l.text)?.[1];
+    const command = isShellLine(l.text) ? CHECK_COMMAND.exec(l.text)?.[1] : void 0;
     if (!command || addedCommands.has(command)) continue;
     const what = file.status === "deleted" ? "Workflow running a check deleted" : "Removed CI line running a check";
     findings.push({
@@ -383,6 +383,10 @@ function matchAdded(file, patterns, removed = multiset([file], "del")) {
     }
   }
   return findings;
+}
+function isShellLine(line) {
+  if (/^\s*(-\s*)?run:/.test(line)) return true;
+  return !/^\s*(-\s*)?([\w-]+\s*:|[{[])/.test(line);
 }
 function multiset(files, kind) {
   const m = /* @__PURE__ */ new Map();

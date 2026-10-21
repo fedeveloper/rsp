@@ -6,7 +6,7 @@ To reproduce, clone each repository with `git clone --depth 250 <url>`, check ou
 
 | Repository | Head commit | Commits checked | Commits with findings | `checks/disabled` | `deps/undeclared` | `env/missing-example` |
 | --- | --- | --- | --- | --- | --- | --- |
-| [flask](https://github.com/pallets/flask) | `d086db856be1` | 100 | 24 | 42 | 0 | 0 |
+| [flask](https://github.com/pallets/flask) | `d086db856be1` | 100 | 23 | 40 | 0 | 0 |
 | [requests](https://github.com/psf/requests) | `611c6162cbc4` | 100 | 4 | 95 | 0 | 0 |
 | [httpx](https://github.com/encode/httpx) | `b5addb64f016` | 100 | 10 | 32 | 0 | 0 |
 | [fastapi](https://github.com/fastapi/fastapi) | `624ec316850e` | 100 | 8 | 13 | 0 | 0 |
@@ -32,8 +32,6 @@ To reproduce, clone each repository with `git clone --depth 250 <url>`, check ou
 | `d98eb69a35` | revert cli test change | `checks/disabled` | `tests/test_cli.py` | Assertions in test file went from 99 to 98 | n/a |
 | `12e95c93b4` | fix provide_automatic_options override (#5917) | `checks/disabled` | `tests/test_basic.py` | Assertions in test file went from 321 to 312 | n/a |
 | `5880befcd2` | Merge branch 'stable' | `checks/disabled` | `src/flask/app.py:361` | Added type: ignore comment | new line (0 -> 1) |
-| `2579ce9f18` | Merge branch 'stable' | `checks/disabled` | `.github/workflows/tests.yaml` | Removed CI line running a check (base line 16) | n/a |
-| `2579ce9f18` | Merge branch 'stable' | `checks/disabled` | `.github/workflows/tests.yaml` | Removed CI line running a check (base line 19) | n/a |
 | `96a01e420b` | Merge branch 'stable' | `checks/disabled` | `src/flask/sessions.py:30` | Added type: ignore comment | new line (0 -> 1) |
 | `70d04b5a26` | pass context through dispatch methods (#5818) | `checks/disabled` | `src/flask/app.py:91` | Added type: ignore comment | new line (1 -> 3) |
 | `70d04b5a26` | pass context through dispatch methods (#5818) | `checks/disabled` | `src/flask/app.py:105` | Added type: ignore comment | new line (1 -> 3) |
