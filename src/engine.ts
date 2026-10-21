@@ -1,16 +1,27 @@
 import { createHash } from "node:crypto";
+import type { Config } from "./config.js";
+import { globToRegExp } from "./glob.js";
 import type { DiffContext, Finding, Report, Rule } from "./types.js";
 import { VERSION } from "./version.js";
 
-/** `options` are the CLI flags besides base, head and rule needed to reproduce a run. */
-export function runRules(ctx: DiffContext, rules: Rule[], options: string[] = []): Report {
+/**
+ * `options` are the CLI flags besides base, head and rule needed to reproduce a
+ * run. `config` drops the findings a rule's `exclude` and `allow` accept;
+ * disabled rules are expected to be left out of `rules` by the caller.
+ */
+export function runRules(ctx: DiffContext, rules: Rule[], options: string[] = [], config?: Config): Report {
   const opts = options.map((o) => ` ${o}`).join("");
   const findings: Finding[] = [];
   for (const rule of rules) {
+    const rc = config?.rules[rule.id];
+    const excluded = (rc?.exclude ?? []).map(globToRegExp);
     for (const raw of rule.run(ctx)) {
+      if (rc?.allow.includes(raw.key)) continue;
+      if (raw.locations.some((l) => excluded.some((re) => re.test(l.path)))) continue;
       findings.push({
         ruleId: rule.id,
         ruleVersion: rule.version,
+        key: raw.key,
         message: raw.message,
         locations: raw.locations,
         evidence: raw.evidence,
@@ -27,6 +38,7 @@ export function runRules(ctx: DiffContext, rules: Rule[], options: string[] = []
     base: ctx.base,
     head: ctx.head,
     options,
+    config: config?.path ?? null,
     rules: rules.map((r) => ({ id: r.id, version: r.version })).sort((a, b) => cmp(a.id, b.id)),
     findings,
   };

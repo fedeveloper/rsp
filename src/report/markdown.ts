@@ -19,6 +19,7 @@ export function toMarkdown(report: Report): string {
   }
 
   const opts = report.options.map((o) => ` ${o}`).join("");
+  if (report.config) lines.push("", `Configuration: \`${report.config}\` from the base commit.`);
   lines.push(
     "",
     `Reproduce: \`rsp check --base ${report.base} --head ${report.head}${opts}\``,

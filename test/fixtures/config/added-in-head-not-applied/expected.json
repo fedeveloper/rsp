@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "svc/app.py", "line": 1, "message": "Added noqa comment", "evidence": "import requests  # noqa"}
+]

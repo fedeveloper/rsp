@@ -41,6 +41,7 @@ const KNOWN_DISTRIBUTIONS: Record<string, string[]> = {
 export const depsUndeclared: Rule = {
   id: "deps/undeclared",
   version: "0.2.0",
+  keys: "the imported module (Python) or package (JavaScript), e.g. `boto3`",
   description:
     "Python and JavaScript/TypeScript imports added in the diff whose package is not declared in a dependency manifest.",
   run(ctx) {
@@ -69,6 +70,7 @@ function python(ctx: DiffContext): RawFinding[] {
         if (PYTHON_STDLIB.has(mod) || local.has(mod) || optional.has(mod)) continue;
         if (candidates(mod).some((c) => declared.names.has(c))) continue;
         findings.push({
+          key: mod,
           message: `Imports \`${mod}\`, not declared in ${where}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim(),
@@ -109,6 +111,7 @@ function javascript(ctx: DiffContext): RawFinding[] {
         if (packages.some((p) => p.names.has(name) || p.names.has(typesPackage(name)))) continue;
         if (isInTryBlock(lines, l.newLine! - 1)) continue;
         findings.push({
+          key: name,
           message: `Imports \`${name}\`, not declared in ${where}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim(),

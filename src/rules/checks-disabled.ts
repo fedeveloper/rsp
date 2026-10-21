@@ -2,63 +2,66 @@ import type { DiffContext, DiffLine, FileChange, RawFinding, Rule } from "../typ
 import { blankStrings, JS_FILE, nonCodeLines } from "./js.js";
 
 interface Pattern {
+  /** What a project lists under `allow` in .rsp.toml to accept these findings. */
+  id: string;
   label: string;
   regex: RegExp;
 }
 
 const PYTHON_PATTERNS: Pattern[] = [
-  { label: "pytest skip marker", regex: /@pytest\.mark\.skip(if)?\b/ },
-  { label: "pytest xfail marker", regex: /@pytest\.mark\.xfail\b/ },
-  { label: "pytest.skip() call", regex: /\bpytest\.skip\s*\(/ },
-  { label: "unittest skip decorator", regex: /@unittest\.(skip|skipIf|skipUnless|expectedFailure)\b/ },
-  { label: "noqa comment", regex: /#\s*noqa\b/i },
-  { label: "type: ignore comment", regex: /#\s*type:\s*ignore\b/ },
-  { label: "pylint disable comment", regex: /#\s*pylint:\s*disable\b/ },
-  { label: "coverage exclusion", regex: /#\s*pragma:\s*no\s*cover\b/ },
-  { label: "bandit nosec comment", regex: /#\s*nosec\b/ },
+  { id: "pytest-skip", label: "pytest skip marker", regex: /@pytest\.mark\.skip(if)?\b/ },
+  { id: "pytest-xfail", label: "pytest xfail marker", regex: /@pytest\.mark\.xfail\b/ },
+  { id: "pytest-skip-call", label: "pytest.skip() call", regex: /\bpytest\.skip\s*\(/ },
+  { id: "unittest-skip", label: "unittest skip decorator", regex: /@unittest\.(skip|skipIf|skipUnless|expectedFailure)\b/ },
+  { id: "noqa", label: "noqa comment", regex: /#\s*noqa\b/i },
+  { id: "type-ignore", label: "type: ignore comment", regex: /#\s*type:\s*ignore\b/ },
+  { id: "pylint-disable", label: "pylint disable comment", regex: /#\s*pylint:\s*disable\b/ },
+  { id: "coverage-exclusion", label: "coverage exclusion", regex: /#\s*pragma:\s*no\s*cover\b/ },
+  { id: "nosec", label: "bandit nosec comment", regex: /#\s*nosec\b/ },
 ];
 
 const JS_PATTERNS: Pattern[] = [
-  { label: "eslint-disable comment", regex: /(\/\/|\/\*)\s*(eslint|oxlint)-disable\b/ },
-  { label: "@ts-ignore comment", regex: /(\/\/|\/\*)\s*@ts-ignore\b/ },
-  { label: "@ts-nocheck comment", regex: /(\/\/|\/\*)\s*@ts-nocheck\b/ },
-  { label: "@ts-expect-error comment", regex: /(\/\/|\/\*)\s*@ts-expect-error\b/ },
-  { label: "biome-ignore comment", regex: /(\/\/|\/\*)\s*biome-ignore\b/ },
-  { label: "coverage exclusion", regex: /(\/\/|\/\*)\s*(istanbul|c8|v8)\s+ignore\b/ },
+  { id: "eslint-disable", label: "eslint-disable comment", regex: /(\/\/|\/\*)\s*(eslint|oxlint)-disable\b/ },
+  { id: "ts-ignore", label: "@ts-ignore comment", regex: /(\/\/|\/\*)\s*@ts-ignore\b/ },
+  { id: "ts-nocheck", label: "@ts-nocheck comment", regex: /(\/\/|\/\*)\s*@ts-nocheck\b/ },
+  { id: "ts-expect-error", label: "@ts-expect-error comment", regex: /(\/\/|\/\*)\s*@ts-expect-error\b/ },
+  { id: "biome-ignore", label: "biome-ignore comment", regex: /(\/\/|\/\*)\s*biome-ignore\b/ },
+  { id: "coverage-exclusion", label: "coverage exclusion", regex: /(\/\/|\/\*)\s*(istanbul|c8|v8)\s+ignore\b/ },
 ];
 
 // Only in test files, where `it.skip(` cannot be anything else.
 const JS_TEST_PATTERNS: Pattern[] = [
-  { label: "skipped test (`.skip`)", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.(skip|skipIf|fixme)\b/ },
-  { label: "focused test (`.only`), which skips the others", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.only\b/ },
-  { label: "skipped test (`x` prefix)", regex: /(^|[^\w.$])x(describe|it|test|context)\s*\(/ },
+  { id: "test-skip", label: "skipped test (`.skip`)", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.(skip|skipIf|fixme)\b/ },
+  { id: "test-only", label: "focused test (`.only`), which skips the others", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.only\b/ },
+  { id: "test-skip", label: "skipped test (`x` prefix)", regex: /(^|[^\w.$])x(describe|it|test|context)\s*\(/ },
 ];
 
 const WORKFLOW_PATTERNS: Pattern[] = [
-  { label: "continue-on-error: true", regex: /^\s*continue-on-error:\s*true\b/ },
-  { label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
-  { label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ },
-  { label: "step or job disabled with `if: false`", regex: /^\s*-?\s*if:\s*(false|\$\{\{\s*false\s*\}\})\s*$/ },
+  { id: "continue-on-error", label: "continue-on-error: true", regex: /^\s*continue-on-error:\s*true\b/ },
+  { id: "or-true", label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
+  { id: "or-exit-0", label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ },
+  { id: "if-false", label: "step or job disabled with `if: false`", regex: /^\s*-?\s*if:\s*(false|\$\{\{\s*false\s*\}\})\s*$/ },
 ];
 
 const TEST_CONFIG_PATTERNS: Pattern[] = [
-  { label: "pytest option that excludes tests", regex: /--deselect\b|--ignore(-glob)?\b|(^|\s)-p\s+no:/ },
+  { id: "pytest-exclude-option", label: "pytest option that excludes tests", regex: /--deselect\b|--ignore(-glob)?\b|(^|\s)-p\s+no:/ },
 ];
 
 const PACKAGE_JSON_PATTERNS: Pattern[] = [
-  { label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
-  { label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ },
+  { id: "or-true", label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
+  { id: "or-exit-0", label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ },
 ];
 
 const TSCONFIG_PATTERNS: Pattern[] = [
   {
+    id: "ts-strict-off",
     label: "TypeScript check turned off",
     regex: /"(strict|noImplicitAny|strictNullChecks|strictFunctionTypes|strictBindCallApply|noImplicitThis|alwaysStrict|noImplicitReturns|noUnusedLocals|noUnusedParameters|noUncheckedIndexedAccess|noFallthroughCasesInSwitch)"\s*:\s*false\b/,
   },
 ];
 
 const ESLINT_CONFIG_PATTERNS: Pattern[] = [
-  { label: "ESLint rule turned off", regex: /['"]?[\w@/-]+['"]?\s*:\s*\[?\s*(['"]off['"]|0\s*[,\]}]|0\s*$)/ },
+  { id: "eslint-rule-off", label: "ESLint rule turned off", regex: /['"]?[\w@/-]+['"]?\s*:\s*\[?\s*(['"]off['"]|0\s*[,\]}]|0\s*$)/ },
 ];
 
 // Checks of the same kind replace one another: moving from eslint to oxlint
@@ -92,9 +95,19 @@ const TEST_CONFIG_FILE = /(^|\/)(pyproject\.toml|setup\.cfg|pytest\.ini|tox\.ini
 const TSCONFIG_FILE = /(^|\/)[jt]sconfig[\w.-]*\.json$/;
 const ESLINT_CONFIG_FILE = /(^|\/)(eslint\.config\.[cm]?[jt]s|\.eslintrc(\.(json|js|cjs|yml|yaml))?)$/;
 
+const KNOWN_KEYS = [
+  ...new Set([
+    ...[PYTHON_PATTERNS, JS_PATTERNS, JS_TEST_PATTERNS, WORKFLOW_PATTERNS, TEST_CONFIG_PATTERNS].flat().map((p) => p.id),
+    ...[PACKAGE_JSON_PATTERNS, TSCONFIG_PATTERNS, ESLINT_CONFIG_PATTERNS].flat().map((p) => p.id),
+    "test-file-deleted", "fewer-assertions", "ci-check-removed", "coverage-threshold-lowered", "script-check-removed",
+  ]),
+].sort();
+
 export const checksDisabled: Rule = {
   id: "checks/disabled",
   version: "0.3.0",
+  keys: "a pattern id, e.g. `type-ignore` or `eslint-disable`",
+  knownKeys: KNOWN_KEYS,
   description:
     "Checks that were removed or switched off: deleted test files, fewer assertions, skip markers, " +
     "lint and type suppressions, CI steps or package.json scripts removed or allowed to fail, " +
@@ -121,7 +134,7 @@ export const checksDisabled: Rule = {
 function pythonFile(file: FileChange, removed: Map<string, number>): RawFinding[] {
   if (file.status === "deleted") {
     return PYTHON_TEST_FILE.test(file.path)
-      ? [{ message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }]
+      ? [{ key: "test-file-deleted", message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }]
       : [];
   }
   return matchAdded(file, PYTHON_PATTERNS, removed);
@@ -130,13 +143,13 @@ function pythonFile(file: FileChange, removed: Map<string, number>): RawFinding[
 function jsFile(ctx: DiffContext, file: FileChange, removed: Map<string, number>): RawFinding[] {
   if (file.status === "deleted") {
     return isJsTestFile(file.path, ctx.readBase(file.path))
-      ? [{ message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }]
+      ? [{ key: "test-file-deleted", message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }]
       : [];
   }
   const inTests = JS_TEST_NAME.test(file.path) || JS_TEST_DIR.test(file.path);
   // In type tests `@ts-expect-error` is the assertion, not a suppression.
   const patterns = inTests
-    ? [...JS_PATTERNS.filter((p) => !p.label.startsWith("@ts-expect-error")), ...JS_TEST_PATTERNS]
+    ? [...JS_PATTERNS.filter((p) => p.id !== "ts-expect-error"), ...JS_TEST_PATTERNS]
     : JS_PATTERNS;
   // Suppressions inside strings or template literals are text, not directives.
   const nonCode = nonCodeLines(ctx.readHead(file.path) ?? "");
@@ -163,11 +176,13 @@ function packageJsonFile(ctx: DiffContext, file: FileChange): RawFinding[] {
     findings.push(
       now === undefined
         ? {
+            key: "script-check-removed",
             message: `Removed package.json script \`${name}\`, which ran ${lost.map((c) => `\`${c}\``).join(", ")}`,
             locations: [{ path: file.path }],
             evidence: `"${name}": ${JSON.stringify(command)}`,
           }
         : {
+            key: "script-check-removed",
             message: `package.json script \`${name}\` no longer runs ${lost.map((c) => `\`${c}\``).join(", ")}`,
             locations: [{ path: file.path, line: index >= 0 ? index + 1 : undefined }],
             evidence: index >= 0 ? lines[index]!.trim() : `"${name}": ${JSON.stringify(now)}`,
@@ -204,6 +219,7 @@ function fewerAssertions(ctx: DiffContext): RawFinding[] {
   return counts
     .filter((c) => c.file.status !== "added" && c.file.status !== "deleted" && c.after < c.before)
     .map((c) => ({
+      key: "fewer-assertions",
       message: `Assertions in test file went from ${c.before} to ${c.after}`,
       locations: [{ path: c.file.path }],
       evidence: `assertions: ${c.before} -> ${c.after}`,
@@ -224,6 +240,7 @@ function workflowFile(file: FileChange): RawFinding[] {
     const what = file.status === "deleted" ? "Workflow running a check deleted" : "Removed CI line running a check";
     findings.push({
       // Removed lines exist only in base, so the line number is given as a base line.
+      key: "ci-check-removed",
       message: `${what} (base line ${l.oldLine})`,
       locations: [{ path: file.oldPath }],
       evidence: l.text.trim(),
@@ -239,6 +256,7 @@ function testConfigFile(ctx: DiffContext, file: FileChange): RawFinding[] {
   if (before !== undefined && (after === undefined || after < before)) {
     const line = file.lines.find((l) => l.kind === "add" && COVERAGE_THRESHOLD.test(l.text));
     findings.push({
+      key: "coverage-threshold-lowered",
       message: `Coverage threshold went from ${before} to ${after ?? "none"}`,
       locations: [{ path: file.path, line: line?.newLine }],
       evidence: line?.text.trim() ?? `coverage threshold: ${before} -> none`,
@@ -264,6 +282,7 @@ function matchAdded(
     for (const p of patterns) {
       if (p.regex.test(code(l))) {
         findings.push({
+          key: p.id,
           message: `Added ${p.label}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim(),

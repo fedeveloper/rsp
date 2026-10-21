@@ -1,6 +1,6 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { check, toJson, toMarkdown } from "./index.js";
+import { check, ConfigError, toJson, toMarkdown } from "./index.js";
 import type { Finding, Report } from "./types.js";
 
 export const COMMENT_MARKER = "<!-- rsp:report -->";
@@ -41,6 +41,10 @@ export async function runAction(env: Env = process.env, fetchImpl: Fetch = fetch
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof ConfigError) {
+      log(`::error::rsp configuration is invalid: ${escapeData(msg)}`);
+      return 1;
+    }
     log(`::error::rsp could not read the pull request commits. Check out with fetch-depth: 0. ${escapeData(msg)}`);
     return 1;
   }

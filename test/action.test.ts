@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
 import { COMMENT_MARKER, runAction } from "../src/action.js";
-import { makeFixtureRepo } from "./helpers.js";
+import { type FixtureRepo, makeFixtureRepo, makeRepoFromTrees } from "./helpers.js";
 
 const FIXTURES = join(import.meta.dirname, "fixtures");
 
@@ -26,8 +26,8 @@ function fakeApi(comments: { id: number; body: string }[], failWrites = false) {
   return { calls, fetchImpl };
 }
 
-function setup(fixture: string, inputs: Record<string, string> = {}) {
-  const repo = makeFixtureRepo(join(FIXTURES, fixture));
+function setup(fixture: string | FixtureRepo, inputs: Record<string, string> = {}) {
+  const repo = typeof fixture === "string" ? makeFixtureRepo(join(FIXTURES, fixture)) : fixture;
   const tmp = mkdtempSync(join(tmpdir(), "rsp-action-"));
   const eventPath = join(tmp, "event.json");
   writeFileSync(eventPath, JSON.stringify({ pull_request: { number: 7, base: { sha: repo.base }, head: { sha: repo.head } } }));
@@ -166,4 +166,19 @@ it("runs from the committed bundle", async () => {
   } finally {
     s.cleanup();
   }
+});
+
+it("fails with a clear error when .rsp.toml is invalid", async () => {
+  const tree = new Map([[".rsp.toml", '[rules."checks/disable"]\n'], ["app.py", "x = 1\n"]]);
+  const s = setup(makeRepoFromTrees(tree, new Map([...tree, ["app.py", "x = 2\n"]])));
+  const logs: string[] = [];
+  const write = process.stdout.write;
+  process.stdout.write = ((chunk: string) => logs.push(chunk) > 0) as typeof process.stdout.write;
+  try {
+    assert.equal(await runAction(s.env, fakeApi([]).fetchImpl), 1);
+  } finally {
+    process.stdout.write = write;
+    s.cleanup();
+  }
+  assert.ok(logs.some((l) => /::error::rsp configuration is invalid: \.rsp\.toml: unknown rule "checks\/disable"/.test(l)), logs.join(""));
 });
