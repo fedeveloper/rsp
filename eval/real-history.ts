@@ -54,10 +54,33 @@ function verify(dir: string, base: string, head: string, f: Finding): string {
   if (!loc?.line) return "n/a";
   const text = execFileSync("git", ["-C", dir, "show", `${head}:${loc.path}`], { encoding: "utf8" }).split("\n")[loc.line - 1];
   if (text?.trim() !== f.evidence) return "WRONG LINE";
+  if (f.message.startsWith("Parameters")) return verifySignature(dir, base, head, f);
   if (!f.message.startsWith("Added") && !f.message.startsWith("Imports") && !f.message.startsWith("Reads")) return "line ok";
   const before = countLine(dir, base, text);
   const after = countLine(dir, head, text);
   return after > before ? `new line (${before} -> ${after})` : `NOT NEW (${before} -> ${after})`;
+}
+
+/**
+ * For a parameter change: the reported line defines the function, and its
+ * definition text, up to the closing parenthesis, does not occur in the base file.
+ */
+function verifySignature(dir: string, base: string, head: string, f: Finding): string {
+  const loc = f.locations[0]!;
+  const lines = execFileSync("git", ["-C", dir, "show", `${head}:${loc.path}`], { encoding: "utf8" }).split("\n");
+  const name = /`([^`]+)`/.exec(f.message)![1]!.split(".").pop()!;
+  const first = lines[loc.line! - 1]!;
+  if (!first.includes(name === "__init__" ? "__init__" : name)) return "NOT A DEFINITION";
+  const def: string[] = [];
+  for (let i = loc.line! - 1; i < lines.length && def.length < 60; i++) {
+    def.push(lines[i]!.trim());
+    if (/\)\s*(->.*)?:\s*(#.*)?$|\)\s*(:[^=]*)?(=>|\{)/.test(lines[i]!)) break;
+  }
+  const baseText = execFileSync("git", ["-C", dir, "show", `${base}:${loc.path}`], { encoding: "utf8" })
+    .split("\n")
+    .map((l) => l.trim())
+    .join("\n");
+  return baseText.includes(def.join("\n")) ? "SAME AT BASE" : "definition changed";
 }
 
 const lines: string[] = [

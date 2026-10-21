@@ -103,7 +103,7 @@ it("clears an earlier comment once the findings are gone", async () => {
     const api = fakeApi([{ id: 42, body: `${COMMENT_MARKER}\nold report` }]);
     assert.equal(await runAction(s.env, api.fetchImpl), 0);
     assert.equal(api.calls[1]!.method, "PATCH");
-    assert.match(api.calls[1]!.body!.body, /None of the 3 rules found facts in this diff/);
+    assert.match(api.calls[1]!.body!.body, /None of the 4 rules found facts in this diff/);
   } finally {
     s.cleanup();
   }

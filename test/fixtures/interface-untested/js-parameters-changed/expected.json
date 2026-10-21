@@ -1,0 +1,4 @@
+[
+  {"ruleId": "interface/untested-change", "path": "src/api.ts", "line": 1, "message": "Parameters of `fetchUser`: added `opts?`; no test changed by the diff mentions it", "evidence": "export function fetchUser("},
+  {"ruleId": "interface/untested-change", "path": "src/api.ts", "line": 8, "message": "Parameters of `remove`: added `force=false`; no test changed by the diff mentions it", "evidence": "export const remove = async (userId: string, force = false) => {"}
+]

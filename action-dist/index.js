@@ -2382,8 +2382,259 @@ function envReader(path) {
   return void 0;
 }
 
+// src/rules/signatures.ts
+var PY_DEF = /^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/;
+var PY_CLASS = /^class\s+([A-Za-z_]\w*)\b/;
+function pythonSignatures(text) {
+  const lines = text.split("\n");
+  const out = [];
+  let cls;
+  lines.forEach((line, i) => {
+    if (/^\S/.test(line) && !/^(@|#|\)|\])/.test(line)) {
+      cls = PY_CLASS.exec(line)?.[1];
+    }
+    const m = PY_DEF.exec(line);
+    if (!m) return;
+    const indented = m[1].length > 0;
+    const name = m[2];
+    if (indented && !cls) return;
+    if (cls && indented && m[1].length !== 4 && m[1] !== "	") return;
+    if (!indented) cls = void 0;
+    const owner = indented ? cls : void 0;
+    if (owner?.startsWith("_") || name.startsWith("_") && name !== "__init__") return;
+    const raw = paramsFrom(lines, i, line.indexOf("(", m[0].length - 1), "#");
+    if (raw === void 0) return;
+    let params = splitParams(raw).map(pythonParam).filter((p) => p !== "");
+    if (owner && (params[0] === "self" || params[0] === "cls")) params = params.slice(1);
+    out.push({ name: owner ? `${owner}.${name}` : name, params, shape: params.join(", "), line: i + 1 });
+  });
+  return mergeOverloads(out);
+}
+var JS_EXPORTED = [
+  /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*(?:<[^(]*>)?\s*\(/,
+  /^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:function\s*\*?\s*[\w$]*\s*)?(?:<[^(]*>)?\s*\(/
+];
+function jsSignatures(text) {
+  const lines = text.split("\n");
+  const out = [];
+  lines.forEach((line, i) => {
+    for (const re of JS_EXPORTED) {
+      const m = re.exec(line);
+      if (!m) continue;
+      if (re === JS_EXPORTED[1] && !isArrowOrFunction(lines, i, m[0].length - 1)) continue;
+      const raw = paramsFrom(lines, i, m[0].length - 1, "//");
+      if (raw === void 0) continue;
+      const params = splitParams(raw).map(jsParam).filter((p) => p !== "" && p !== "this");
+      const shape = params.map((p) => p.replace(/^(\.\.\.)?[A-Za-z_$][\w$]*/, "$1_")).join(", ");
+      out.push({ name: m[1], params, shape, line: i + 1 });
+      break;
+    }
+  });
+  return mergeOverloads(out);
+}
+function mergeOverloads(sigs) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const s of sigs) {
+    const prev = byName.get(s.name);
+    byName.set(
+      s.name,
+      prev ? { ...prev, params: [...prev.params, "|", ...s.params], shape: `${prev.shape} | ${s.shape}` } : s
+    );
+  }
+  return [...byName.values()];
+}
+function describeChange(before, after, positional = false) {
+  if (before.includes("|") || after.includes("|")) return `went from \`${overloads(before)}\` to \`${overloads(after)}\``;
+  if (positional) return describePositional(before, after);
+  const name = (p) => p.split("=")[0].replace(/\?$/, "");
+  const old = new Map(before.map((p) => [name(p), p]));
+  const now = new Map(after.map((p) => [name(p), p]));
+  const parts = [];
+  const added = after.filter((p) => !old.has(name(p)));
+  const removed = before.filter((p) => !now.has(name(p)));
+  const changed = after.filter((p) => old.has(name(p)) && old.get(name(p)) !== p);
+  if (added.length) parts.push(`added ${added.map((p) => `\`${p}\``).join(", ")}`);
+  if (removed.length) parts.push(`removed ${removed.map((p) => `\`${p}\``).join(", ")}`);
+  if (changed.length) parts.push(`changed ${changed.map((p) => `\`${old.get(name(p))}\` to \`${p}\``).join(", ")}`);
+  if (parts.length === 0) parts.push(`changed order from \`(${before.join(", ")})\` to \`(${after.join(", ")})\``);
+  return parts.join("; ");
+}
+function isArrowOrFunction(lines, index, open) {
+  const before = lines[index].slice(0, open);
+  if (/function\s*\*?\s*[\w$]*\s*(<[^(]*>)?\s*$/.test(before)) return true;
+  const rest = closingParen(lines, index, open);
+  return rest !== void 0 && /^\s*(:\s*[^=]+)?=>/.test(rest);
+}
+function closingParen(lines, index, open) {
+  let depth = 0;
+  for (let i = index; i < Math.min(lines.length, index + 50); i++) {
+    const line = lines[i];
+    for (let j = i === index ? open : 0; j < line.length; j++) {
+      const c = line[j];
+      if (c === "(") depth++;
+      else if (c === ")" && --depth === 0) return line.slice(j + 1);
+    }
+  }
+  return void 0;
+}
+function paramsFrom(lines, index, open, comment) {
+  let depth = 0;
+  let text = "";
+  let quote;
+  for (let i = index; i < Math.min(lines.length, index + 50); i++) {
+    const line = lines[i];
+    for (let j = i === index ? open : 0; j < line.length; j++) {
+      const c = line[j];
+      if (quote) {
+        if (c === "\\") {
+          text += c + (line[j + 1] ?? "");
+          j++;
+          continue;
+        }
+        if (c === quote) quote = void 0;
+      } else if (c === '"' || c === "'" || c === "`") {
+        quote = c;
+      } else if (line.startsWith(comment, j)) {
+        break;
+      } else if ("([{".includes(c)) {
+        depth++;
+        if (depth === 1 && c === "(") continue;
+      } else if (")]}".includes(c)) {
+        depth--;
+        if (depth === 0) return text;
+      }
+      text += c;
+    }
+    text += " ";
+  }
+  return void 0;
+}
+function splitParams(raw) {
+  const parts = [];
+  let depth = 0;
+  let quote;
+  let cur = "";
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (quote) {
+      if (c === "\\") {
+        cur += c + (raw[i + 1] ?? "");
+        i++;
+        continue;
+      }
+      if (c === quote) quote = void 0;
+    } else if (c === '"' || c === "'" || c === "`") quote = c;
+    else if ("([{<".includes(c)) depth++;
+    else if (")]}>".includes(c) && !(c === ">" && raw[i - 1] === "=")) depth--;
+    else if (c === "," && depth === 0) {
+      parts.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts.map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+}
+function pythonParam(param) {
+  const [head, def] = splitTopLevel(param, "=");
+  const name = splitTopLevel(head, ":")[0].trim();
+  return def === void 0 ? name : `${name}=${def.trim()}`;
+}
+function jsParam(param) {
+  const [head, def] = splitTopLevel(param, "=");
+  let name = head.trim();
+  if (!/^[{[]/.test(name)) name = splitTopLevel(name, ":")[0].trim();
+  else name = name.replace(/\}\s*:.*$/s, "}").replace(/\]\s*:.*$/s, "]");
+  name = name.replace(/^(public|private|protected|readonly)\s+/, "");
+  return def === void 0 ? name : `${name}=${def.trim()}`;
+}
+function splitTopLevel(s, sep) {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if ("([{<".includes(c)) depth++;
+    else if (")]}>".includes(c) && !(c === ">" && s[i - 1] === "=")) depth--;
+    else if (c === sep && depth === 0 && !(sep === "=" && (s[i + 1] === "=" || s[i + 1] === ">" || "!<>".includes(s[i - 1] ?? "")))) {
+      return [s.slice(0, i), s.slice(i + 1)];
+    }
+  }
+  return [s, void 0];
+}
+function overloads(params) {
+  return `(${params.join(", ")})`.replace(/, \|, /g, ") | (");
+}
+function describePositional(before, after) {
+  const shape = (p) => p.replace(/^(\.\.\.)?[A-Za-z_$][\w$]*/, "$1_");
+  const parts = [];
+  const changed = [];
+  for (let i = 0; i < Math.min(before.length, after.length); i++) {
+    if (shape(before[i]) !== shape(after[i])) changed.push(`\`${before[i]}\` to \`${after[i]}\``);
+  }
+  if (after.length > before.length) parts.push(`added ${after.slice(before.length).map((p) => `\`${p}\``).join(", ")}`);
+  if (before.length > after.length) parts.push(`removed ${before.slice(after.length).map((p) => `\`${p}\``).join(", ")}`);
+  if (changed.length) parts.push(`changed ${changed.join(", ")}`);
+  return parts.join("; ");
+}
+
+// src/rules/interface-untested.ts
+var PYTHON_TEST_FILE2 = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/;
+var JS_TEST_FILE = /(^|\/)(__tests__|tests?|e2e|spec)\/.*\.[cm]?[jt]sx?$|\.(test|spec|test-d)\.[cm]?[jt]sx?$/;
+var PYTHON_TEST_DIR = /(^|\/)tests?\//;
+var interfaceUntested = {
+  id: "interface/untested-change",
+  version: "0.1.0",
+  keys: "the function name, e.g. `load_settings` or `Store.add`",
+  description: "Public functions whose parameters changed (added, removed, reordered, new defaults, or renamed where callers pass them by name) while no test file changed by the diff mentions them. Only in repositories that have tests.",
+  run(ctx) {
+    const head = ctx.listHead();
+    if (!head.some(isTestFile2)) return [];
+    const changedTests = ctx.files.filter((f) => f.status !== "deleted" && !f.binary && isTestFile2(f.path)).map((f) => ctx.readHead(f.path) ?? "");
+    const findings = [];
+    for (const file of ctx.files) {
+      if (file.binary || file.status === "added" || file.status === "deleted") continue;
+      if (isTestFile2(file.path) || PYTHON_TEST_DIR.test(file.path)) continue;
+      const extract = signatureReader(file.path);
+      if (!extract) continue;
+      const before = new Map(extract(ctx.readBase(file.oldPath) ?? "").map((s) => [s.name, s]));
+      const touched = new Set(file.lines.filter((l) => l.kind === "add").map((l) => l.newLine));
+      for (const sig of extract(ctx.readHead(file.path) ?? "")) {
+        const old = before.get(sig.name);
+        if (!old || old.shape === sig.shape || !touchesDefinition(ctx, file.path, sig, touched)) continue;
+        const parts = sig.name.split(".");
+        const bare = parts.length > 1 && parts[1] === "__init__" ? parts[0] : parts[parts.length - 1];
+        const word = new RegExp(`\\b${bare.replace(/\$/g, "\\$")}\\b`);
+        if (changedTests.some((t) => word.test(t))) continue;
+        findings.push({
+          key: sig.name,
+          message: `Parameters of \`${sig.name}\`: ${describeChange(old.params, sig.params, !file.path.endsWith(".py"))}; no test changed by the diff mentions it`,
+          locations: [{ path: file.path, line: sig.line }],
+          evidence: (ctx.readHead(file.path) ?? "").split("\n")[sig.line - 1].trim()
+        });
+      }
+    }
+    return findings;
+  }
+};
+function signatureReader(path) {
+  if (path.endsWith(".py")) return pythonSignatures;
+  if (JS_FILE.test(path) && !/\.(vue|svelte)$/.test(path)) return jsSignatures;
+  return void 0;
+}
+function isTestFile2(path) {
+  return PYTHON_TEST_FILE2.test(path) || JS_TEST_FILE.test(path);
+}
+function touchesDefinition(ctx, path, sig, touched) {
+  const lines = (ctx.readHead(path) ?? "").split("\n");
+  for (let n = sig.line; n <= Math.min(lines.length, sig.line + 50); n++) {
+    if (touched.has(n)) return true;
+    if (/\)\s*(->[^:]*)?:\s*(#.*)?$|\)\s*(:[^=]*)?(=>|\{)/.test(lines[n - 1])) return false;
+  }
+  return false;
+}
+
 // src/rules/index.ts
-var ALL_RULES = [checksDisabled, depsUndeclared, envMissingExample];
+var ALL_RULES = [checksDisabled, depsUndeclared, envMissingExample, interfaceUntested];
 
 // src/report/json.ts
 function toJson(report) {
