@@ -1,6 +1,9 @@
 // src/action.ts
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, readFileSync as readFileSync3, writeFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+
+// src/index.ts
+import { readFileSync } from "node:fs";
 
 // node_modules/smol-toml/dist/error.js
 function getLineColFromPtr(string, ptr) {
@@ -1082,6 +1085,41 @@ function assignFingerprints(findings) {
 }
 function cmp(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// src/junit.ts
+var TESTCASE = /<testcase\b((?:[^>"']|"[^"]*"|'[^']*')*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
+var ATTR = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
+function parseJUnit(xml) {
+  const results = /* @__PURE__ */ new Map();
+  const text = xml.replace(/<!--[\s\S]*?-->/g, "");
+  for (const m of text.matchAll(TESTCASE)) {
+    const attrs = /* @__PURE__ */ new Map();
+    for (const a of m[1].matchAll(ATTR)) attrs.set(a[1], unescape(a[3] ?? a[4] ?? ""));
+    const name = attrs.get("name");
+    if (!name) continue;
+    const body = (m[3] ?? "").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
+    const status = /<(failure|error)\b/.test(body) ? "failed" : /<skipped\b/.test(body) ? "skipped" : "passed";
+    const id = [attrs.get("classname") || attrs.get("file"), name].filter(Boolean).join("::");
+    results.set(id, combine(results.get(id), status));
+  }
+  return results;
+}
+function mergeRuns(files) {
+  const results = /* @__PURE__ */ new Map();
+  for (const f of files) {
+    for (const [id, status] of parseJUnit(f.xml)) results.set(id, combine(results.get(id), status));
+  }
+  return { files: files.map((f) => f.path), results };
+}
+function combine(a, b) {
+  if (a === void 0) return b;
+  if (a === "passed" || b === "passed") return "passed";
+  if (a === "failed" || b === "failed") return "failed";
+  return "skipped";
+}
+function unescape(s) {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16))).replace(/&amp;/g, "&");
 }
 
 // src/rules/js.ts
@@ -2633,8 +2671,52 @@ function touchesDefinition(ctx, path, sig, touched) {
   return false;
 }
 
+// src/rules/tests-delta.ts
+var testsDelta = {
+  id: "tests/delta",
+  version: "0.1.0",
+  keys: "the test id, `classname::name` as in the JUnit report, or `no-tests`",
+  description: "Differences between the test results at base and at head, read from JUnit reports: tests that pass at base and fail at head, tests that ran at base and are skipped or missing at head. Runs only when reports are given.",
+  run(ctx) {
+    if (!ctx.tests) return [];
+    const { base, head } = ctx.tests;
+    const where2 = head.files[0] ?? "junit";
+    const finding = (key, message, evidence) => ({
+      key,
+      message,
+      locations: [{ path: where2 }],
+      evidence
+    });
+    if (head.results.size === 0 && base.results.size > 0) {
+      return [finding("no-tests", `No test results at head; ${base.results.size} at base`, `tests: ${base.results.size} -> 0`)];
+    }
+    const findings = [];
+    for (const [id, now] of head.results) {
+      const before = base.results.get(id);
+      if (before === "passed" && now === "failed") {
+        findings.push(finding(id, `Test \`${id}\` fails at head and passed at base`, `${id}: passed -> failed`));
+      } else if (before !== void 0 && before !== "skipped" && now === "skipped") {
+        findings.push(finding(id, `Test \`${id}\` is skipped at head and ran at base`, `${id}: ${before} -> skipped`));
+      }
+    }
+    if (head.results.size < base.results.size) {
+      for (const [id, before] of base.results) {
+        if (head.results.has(id)) continue;
+        findings.push(
+          finding(
+            id,
+            `Test \`${id}\` ran at base and is missing at head (${base.results.size} tests at base, ${head.results.size} at head)`,
+            `${id}: ${before} -> missing`
+          )
+        );
+      }
+    }
+    return findings;
+  }
+};
+
 // src/rules/index.ts
-var ALL_RULES = [checksDisabled, depsUndeclared, envMissingExample, interfaceUntested];
+var ALL_RULES = [checksDisabled, depsUndeclared, envMissingExample, interfaceUntested, testsDelta];
 
 // src/report/json.ts
 function toJson(report) {
@@ -2708,8 +2790,19 @@ function check(opts) {
     const excluded = config.exclude.map(globToRegExp);
     ctx.files = ctx.files.filter((f) => !excluded.some((re) => re.test(f.path) || re.test(f.oldPath)));
   }
+  if (opts.junitBase?.length && opts.junitHead?.length) {
+    const read = (paths) => mergeRuns(paths.map((path) => ({ path, xml: readFileSync(path, "utf8") })));
+    ctx.tests = { base: read(opts.junitBase), head: read(opts.junitHead) };
+  } else if (opts.junitBase?.length || opts.junitHead?.length) {
+    throw new Error("JUnit reports must be given for both base and head");
+  }
   const rules = opts.rules ? selectRules(opts.rules) : ALL_RULES.filter((r) => config?.rules[r.id]?.enabled !== false);
-  const options = [...exclude.map((g) => `--exclude ${shellQuote(g)}`), ...opts.config === false ? ["--no-config"] : []];
+  const options = [
+    ...exclude.map((g) => `--exclude ${shellQuote(g)}`),
+    ...opts.config === false ? ["--no-config"] : [],
+    ...(ctx.tests?.base.files ?? []).map((f) => `--junit-base ${shellQuote(f)}`),
+    ...(ctx.tests?.head.files ?? []).map((f) => `--junit-head ${shellQuote(f)}`)
+  ];
   return runRules(ctx, rules, options, config);
 }
 function selectRules(ids) {
@@ -2723,6 +2816,65 @@ function shellQuote(s) {
   return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+// src/test-runner.ts
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync as readFileSync2, rmSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+function runTestsAtBaseAndHead(opts) {
+  const head = resolveCommit(opts.repoDir, opts.head);
+  const base = mergeBase(opts.repoDir, resolveCommit(opts.repoDir, opts.base), head);
+  const reports = join(opts.workDir, "rsp-junit");
+  mkdirSync(reports, { recursive: true });
+  const runAt = (label, commit, attempt) => {
+    const dir = join(opts.workDir, `rsp-${label}`);
+    if (attempt === 0) {
+      rmSync(dir, { recursive: true, force: true });
+      git(opts.repoDir, ["worktree", "add", "--detach", "--force", dir, commit]);
+    }
+    opts.log(`::group::rsp: tests at ${label} ${commit.slice(0, 12)}${attempt > 0 ? ` (rerun ${attempt})` : ""}`);
+    const res = spawnSync("bash", ["-c", opts.command], { cwd: dir, stdio: ["ignore", "inherit", "inherit"] });
+    opts.log(`::endgroup::`);
+    opts.log(`rsp: test command at ${label} exited with ${res.status ?? res.signal}`);
+    const found = findFiles(dir, globToRegExp(opts.junit));
+    if (found.length === 0) opts.log(`::warning::rsp: the test command wrote no file matching ${opts.junit} at ${label}`);
+    return found.map((f, i) => {
+      const target = join(reports, `${label}-${attempt}-${i}.xml`);
+      copyFileSync(join(dir, f), target);
+      return target;
+    });
+  };
+  try {
+    const junitBase = runAt("base", base, 0);
+    const junitHead = runAt("head", head, 0);
+    const read = (paths) => mergeRuns(paths.map((path) => ({ path, xml: readFileSync2(path, "utf8") })));
+    const baseResults = read(junitBase).results;
+    for (let attempt = 1; attempt <= opts.retries; attempt++) {
+      const headResults = read(junitHead).results;
+      const newFailures = [...headResults].filter(([id, s]) => s === "failed" && baseResults.get(id) === "passed");
+      if (newFailures.length === 0) break;
+      junitHead.push(...runAt("head", head, attempt));
+    }
+    return { junitBase, junitHead };
+  } finally {
+    for (const label of ["base", "head"]) {
+      try {
+        git(opts.repoDir, ["worktree", "remove", "--force", join(opts.workDir, `rsp-${label}`)]);
+      } catch {
+      }
+    }
+  }
+}
+function findFiles(root, pattern, dir = root, out = []) {
+  for (const entry of readdirSync(dir).sort()) {
+    if (entry === ".git" || entry === "node_modules" || entry === ".venv") continue;
+    const path = join(dir, entry);
+    const rel = relative(root, path);
+    if (statSync(path).isDirectory()) findFiles(root, pattern, path, out);
+    else if (pattern.test(rel)) out.push(rel);
+  }
+  return out;
+}
+
 // src/action.ts
 var COMMENT_MARKER = "<!-- rsp:report -->";
 async function runAction(env = process.env, fetchImpl = fetch) {
@@ -2733,20 +2885,46 @@ async function runAction(env = process.env, fetchImpl = fetch) {
     log(`::error::fail-on must be "never" or "any", got "${failOn}"`);
     return 1;
   }
-  const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH ?? "", "utf8"));
+  const event = JSON.parse(readFileSync3(env.GITHUB_EVENT_PATH ?? "", "utf8"));
   const pr = event.pull_request;
   if (!pr) {
     log(`::notice::rsp checks pull requests; event "${env.GITHUB_EVENT_NAME}" has none, nothing to do.`);
     return 0;
   }
+  const repoDir = env.GITHUB_WORKSPACE ?? process.cwd();
+  const retries = Number(input("test-retries") || "1");
+  if (!Number.isInteger(retries) || retries < 0) {
+    log(`::error::test-retries must be a whole number, got "${input("test-retries")}"`);
+    return 1;
+  }
+  let junit;
+  if (input("test-command")) {
+    try {
+      junit = runTestsAtBaseAndHead({
+        repoDir,
+        base: pr.base.sha,
+        head: pr.head.sha,
+        command: input("test-command"),
+        junit: input("junit") || "**/junit*.xml",
+        retries,
+        workDir: env.RUNNER_TEMP ?? process.cwd(),
+        log
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`::error::rsp could not run the tests at base and head: ${escapeData(msg)}`);
+      return 1;
+    }
+  }
   let report;
   try {
     report = check({
-      repoDir: env.GITHUB_WORKSPACE ?? process.cwd(),
+      repoDir,
       base: pr.base.sha,
       head: pr.head.sha,
       rules: list("rules").length > 0 ? list("rules") : void 0,
-      exclude: list("exclude")
+      exclude: list("exclude"),
+      ...junit
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -2758,7 +2936,7 @@ async function runAction(env = process.env, fetchImpl = fetch) {
     return 1;
   }
   const markdown = toMarkdown(report);
-  const reportPath = join(env.RUNNER_TEMP ?? process.cwd(), "rsp-report.json");
+  const reportPath = join2(env.RUNNER_TEMP ?? process.cwd(), "rsp-report.json");
   writeFileSync(reportPath, toJson(report));
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, markdown);
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `findings=${report.findings.length}

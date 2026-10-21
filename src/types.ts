@@ -1,3 +1,5 @@
+import type { TestRun } from "./junit.js";
+
 export type FileStatus = "added" | "modified" | "deleted" | "renamed";
 
 export interface DiffLine {
@@ -32,6 +34,8 @@ export interface DiffContext {
   readHead(path: string): string | undefined;
   /** Every file path tracked at head, sorted. */
   listHead(): string[];
+  /** Test results at base and head, when JUnit reports were given. */
+  tests?: { base: TestRun; head: TestRun };
 }
 
 export interface Location {

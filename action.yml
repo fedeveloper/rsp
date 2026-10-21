@@ -18,6 +18,18 @@ inputs:
   rules:
     description: Rule ids to run, one per line or comma separated. Empty runs every rule.
     default: ""
+  test-command:
+    description: >-
+      Shell command that installs dependencies and runs the tests, writing JUnit XML, e.g.
+      "pip install -e .[test] && pytest --junitxml=junit.xml". When set, rsp runs it at base and at head,
+      each in a separate worktree, and the tests/delta rule compares the results.
+    default: ""
+  junit:
+    description: Glob, relative to the repository root, of the JUnit files the test command writes.
+    default: "**/junit*.xml"
+  test-retries:
+    description: Extra runs at head while tests fail there but passed at base, to clear flaky failures.
+    default: "1"
   comment:
     description: '"true" (default) keeps one comment on the pull request up to date; "false" writes only the job summary.'
     default: "true"

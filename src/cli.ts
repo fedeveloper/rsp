@@ -17,6 +17,8 @@ Options:
   --rule <id>       Run only this rule; repeatable
   --exclude <glob>  Ignore changed files matching this glob; repeatable
   --no-config       Ignore .rsp.toml in the base commit
+  --junit-base <f>  JUnit report of the tests run at base; repeatable
+  --junit-head <f>  JUnit report of the tests run at head; repeatable
   --list-rules      Print the available rules and exit
   --version         Print the version and exit
   --help            Print this help and exit
@@ -34,6 +36,8 @@ function main(argv: string[]): number {
       rule: { type: "string", multiple: true },
       exclude: { type: "string", multiple: true },
       "no-config": { type: "boolean", default: false },
+      "junit-base": { type: "string", multiple: true },
+      "junit-head": { type: "string", multiple: true },
       "list-rules": { type: "boolean", default: false },
       version: { type: "boolean", default: false },
       help: { type: "boolean", default: false },
@@ -71,6 +75,8 @@ function main(argv: string[]): number {
     rules: values.rule,
     exclude: values.exclude,
     config: !values["no-config"],
+    junitBase: values["junit-base"],
+    junitHead: values["junit-head"],
   });
   process.stdout.write(values.format === "json" ? toJson(report) : toMarkdown(report));
   // Advisory by default: findings never change the exit code yet.

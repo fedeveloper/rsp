@@ -14,6 +14,7 @@ Counted per mutation and rule. A true positive is an expected rule that reported
 | `deps/undeclared` | 6 | 0 | 0 | 100% | 100% |
 | `env/missing-example` | 5 | 0 | 0 | 100% | 100% |
 | `interface/untested-change` | 0 | 0 | 0 | n/a | n/a |
+| `tests/delta` | 0 | 0 | 0 | n/a | n/a |
 
 ## By mutation
 

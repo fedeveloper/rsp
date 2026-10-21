@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { check, ConfigError, toJson, toMarkdown } from "./index.js";
+import { runTestsAtBaseAndHead } from "./test-runner.js";
 import type { Finding, Report } from "./types.js";
 
 export const COMMENT_MARKER = "<!-- rsp:report -->";
@@ -30,14 +31,41 @@ export async function runAction(env: Env = process.env, fetchImpl: Fetch = fetch
     return 0;
   }
 
+  const repoDir = env.GITHUB_WORKSPACE ?? process.cwd();
+  const retries = Number(input("test-retries") || "1");
+  if (!Number.isInteger(retries) || retries < 0) {
+    log(`::error::test-retries must be a whole number, got "${input("test-retries")}"`);
+    return 1;
+  }
+  let junit: { junitBase: string[]; junitHead: string[] } | undefined;
+  if (input("test-command")) {
+    try {
+      junit = runTestsAtBaseAndHead({
+        repoDir,
+        base: pr.base.sha,
+        head: pr.head.sha,
+        command: input("test-command"),
+        junit: input("junit") || "**/junit*.xml",
+        retries,
+        workDir: env.RUNNER_TEMP ?? process.cwd(),
+        log,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`::error::rsp could not run the tests at base and head: ${escapeData(msg)}`);
+      return 1;
+    }
+  }
+
   let report: Report;
   try {
     report = check({
-      repoDir: env.GITHUB_WORKSPACE ?? process.cwd(),
+      repoDir,
       base: pr.base.sha,
       head: pr.head.sha,
       rules: list("rules").length > 0 ? list("rules") : undefined,
       exclude: list("exclude"),
+      ...junit,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
