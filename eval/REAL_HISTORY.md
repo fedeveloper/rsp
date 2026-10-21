@@ -306,7 +306,7 @@ To reproduce, clone each repository with `git clone --depth 400 <url>`, check ou
 | `c69643b60c` | Add file-like pager: `click.get_pager_file()` (#1572) | `checks/disabled` | `src/click/_termui_impl.py:429` | Added type: ignore comment | new line (0 -> 1) |
 | `c5cced7b30` | fix: `_termui_impl.open_url()` — 'start' on Windows is a cmd built-in, not an executable (#3186) | `checks/disabled` | `src/click/_termui_impl.py:729` | Added type: ignore comment | new line (0 -> 1) |
 | `2468b70997` | Fix readline backspace/line-wrapping on linux (#2969) | `checks/disabled` | `tests/test_utils.py:232` | Added pytest skip marker | new line (2 -> 3) |
-| `d2e4a42ff4` | Extract `_guess_type` from `convert_type` and add overloads (#3372) | `interface/untested-change` | `src/click/types.py:1196` | Parameters of `convert_type`: went from `(ty, default=None)` to `(ty, default=None) \| (ty=None, default=None)`; no test changed by the diff mentions it | definition changed |
+| `d2e4a42ff4` | Extract `_guess_type` from `convert_type` and add overloads (#3372) | `interface/untested-change` | `src/click/types.py:1211` | Parameters of `convert_type`: changed `ty` to `ty=None`; no test changed by the diff mentions it | definition changed |
 | `8a2b48901a` | `ParamType` and other typing improvements (#3371) | `checks/disabled` | `src/click/types.py:178` | Added type: ignore comment | new line (0 -> 1) |
 | `8a2b48901a` | `ParamType` and other typing improvements (#3371) | `checks/disabled` | `src/click/types.py:238` | Added type: ignore comment | new line (0 -> 1) |
 | `8a2b48901a` | `ParamType` and other typing improvements (#3371) | `checks/disabled` | `src/click/types.py:553` | Added type: ignore comment | new line (0 -> 1) |
