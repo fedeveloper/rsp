@@ -71,17 +71,22 @@ export function jsSignatures(text: string): Signature[] {
   return mergeOverloads(out);
 }
 
-/** Overloads declare one name several times; callers see all of them. */
+/**
+ * Overloads declare one name several times; callers see all of them. Overloads
+ * that differ only in annotations have the same shape and count once, so adding
+ * typed overloads of an unchanged function is no change.
+ */
 function mergeOverloads(sigs: Signature[]): Signature[] {
-  const byName = new Map<string, Signature>();
+  const byName = new Map<string, Signature & { shapes: Set<string> }>();
   for (const s of sigs) {
     const prev = byName.get(s.name);
-    byName.set(
-      s.name,
-      prev ? { ...prev, params: [...prev.params, "|", ...s.params], shape: `${prev.shape} | ${s.shape}` } : s,
-    );
+    if (!prev) byName.set(s.name, { ...s, shapes: new Set([s.shape]) });
+    else if (!prev.shapes.has(s.shape)) {
+      prev.shapes.add(s.shape);
+      byName.set(s.name, { ...prev, params: [...prev.params, "|", ...s.params], shape: `${prev.shape} | ${s.shape}` });
+    }
   }
-  return [...byName.values()];
+  return [...byName.values()].map(({ shapes: _, ...s }) => s);
 }
 
 /**
@@ -193,16 +198,20 @@ function splitParams(raw: string): string[] {
 function pythonParam(param: string): string {
   const [head, def] = splitTopLevel(param, "=");
   const name = splitTopLevel(head, ":")[0].trim();
+  // For callers, a default of undefined is the same as an optional parameter.
+  if (def?.trim() === "undefined") return name.endsWith("?") ? name : `${name}?`;
   return def === undefined ? name : `${name}=${def.trim()}`;
 }
 
 /** `name?: string = "a"` becomes `name="a"`; `opts?: T` becomes `opts?`; destructuring keeps its keys. */
 function jsParam(param: string): string {
-  const [head, def] = splitTopLevel(param, "=");
+  const [head, def] = splitTopLevel(param.replace(/\/\*[\s\S]*?\*\//g, " "), "=");
   let name = head.trim();
   if (!/^[{[]/.test(name)) name = splitTopLevel(name, ":")[0].trim();
   else name = name.replace(/\}\s*:.*$/s, "}").replace(/\]\s*:.*$/s, "]");
   name = name.replace(/^(public|private|protected|readonly)\s+/, "");
+  // For callers, a default of undefined is the same as an optional parameter.
+  if (def?.trim() === "undefined") return name.endsWith("?") ? name : `${name}?`;
   return def === undefined ? name : `${name}=${def.trim()}`;
 }
 

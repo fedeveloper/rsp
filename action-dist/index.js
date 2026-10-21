@@ -1032,7 +1032,7 @@ function buildContext(repoDir, baseRef, headRef, exclude = []) {
 import { createHash } from "node:crypto";
 
 // src/version.ts
-var VERSION = "0.2.0";
+var VERSION = "0.3.0";
 
 // src/engine.ts
 function runRules(ctx, rules, options = [], config) {
@@ -2474,12 +2474,13 @@ function mergeOverloads(sigs) {
   const byName = /* @__PURE__ */ new Map();
   for (const s of sigs) {
     const prev = byName.get(s.name);
-    byName.set(
-      s.name,
-      prev ? { ...prev, params: [...prev.params, "|", ...s.params], shape: `${prev.shape} | ${s.shape}` } : s
-    );
+    if (!prev) byName.set(s.name, { ...s, shapes: /* @__PURE__ */ new Set([s.shape]) });
+    else if (!prev.shapes.has(s.shape)) {
+      prev.shapes.add(s.shape);
+      byName.set(s.name, { ...prev, params: [...prev.params, "|", ...s.params], shape: `${prev.shape} | ${s.shape}` });
+    }
   }
-  return [...byName.values()];
+  return [...byName.values()].map(({ shapes: _, ...s }) => s);
 }
 function describeChange(before, after, positional = false) {
   if (before.includes("|") || after.includes("|")) return `went from \`${overloads(before)}\` to \`${overloads(after)}\``;
@@ -2577,14 +2578,16 @@ function splitParams(raw) {
 function pythonParam(param) {
   const [head, def] = splitTopLevel(param, "=");
   const name = splitTopLevel(head, ":")[0].trim();
+  if (def?.trim() === "undefined") return name.endsWith("?") ? name : `${name}?`;
   return def === void 0 ? name : `${name}=${def.trim()}`;
 }
 function jsParam(param) {
-  const [head, def] = splitTopLevel(param, "=");
+  const [head, def] = splitTopLevel(param.replace(/\/\*[\s\S]*?\*\//g, " "), "=");
   let name = head.trim();
   if (!/^[{[]/.test(name)) name = splitTopLevel(name, ":")[0].trim();
   else name = name.replace(/\}\s*:.*$/s, "}").replace(/\]\s*:.*$/s, "]");
   name = name.replace(/^(public|private|protected|readonly)\s+/, "");
+  if (def?.trim() === "undefined") return name.endsWith("?") ? name : `${name}?`;
   return def === void 0 ? name : `${name}=${def.trim()}`;
 }
 function splitTopLevel(s, sep) {
