@@ -10,7 +10,7 @@ Counted per mutation and rule. A true positive is an expected rule that reported
 
 | Rule | True positives | False negatives | False positives | Precision | Recall |
 | --- | --- | --- | --- | --- | --- |
-| `checks/disabled` | 6 | 1 | 0 | 100% | 86% |
+| `checks/disabled` | 7 | 0 | 0 | 100% | 100% |
 | `deps/undeclared` | 6 | 0 | 0 | 100% | 100% |
 | `env/missing-example` | 5 | 0 | 0 | 100% | 100% |
 
@@ -29,7 +29,7 @@ Counted per mutation and rule. A true positive is an expected rule that reported
 | `env-destructured` | risky | Protect the API with ADMIN_PASSWORD and SYNC_TOKEN read by destructuring | `env/missing-example` | `env/missing-example` | pass |
 | `eslint-disable-hooks` | risky | Silence react-hooks/exhaustive-deps on the polling effect | `checks/disabled` | `checks/disabled` | pass |
 | `eslint-disable-file` | risky | Disable ESLint for the whole price fetcher | `checks/disabled` | `checks/disabled` | pass |
-| `ts-ignore` | risky | Hide a type error on app.listen with @ts-ignore | `checks/disabled` | none | FAIL, missed checks/disabled |
+| `ts-ignore` | risky | Hide a type error on app.listen with @ts-ignore | `checks/disabled` | `checks/disabled` | pass |
 | `coverage-ignore` | risky | Exclude the ZIP extractor from coverage | `checks/disabled` | `checks/disabled` | pass |
 | `test-skipped` | risky | Add a test suite with the failing test skipped | `checks/disabled` | `checks/disabled` | pass |
 | `test-focused` | risky | Add a test suite with describe.only left in | `checks/disabled` | `checks/disabled` | pass |
@@ -96,6 +96,10 @@ Counted per mutation and rule. A true positive is an expected rule that reported
 **eslint-disable-file**
 
 - `checks/disabled` `services/priceFetcher.js:1`: Added eslint-disable comment
+
+**ts-ignore**
+
+- `checks/disabled` `server.js:474`: Added @ts-ignore comment
 
 **coverage-ignore**
 

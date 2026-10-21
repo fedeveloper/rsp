@@ -327,7 +327,7 @@ function envVarReads(line) {
       if (blank.startsWith(m[0].slice(0, 4), m.index)) names.push(m[1]);
     }
   }
-  const d = ENV_DESTRUCTURE.exec(code2);
+  const d = ENV_DESTRUCTURE.exec(blank);
   if (d) {
     for (const part of d[1].split(",")) {
       const name = /^\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(part)?.[1];
@@ -340,13 +340,15 @@ function nonCodeLines(text) {
   const result = /* @__PURE__ */ new Set();
   const stack = [];
   let state = "code";
+  let inClass = false;
+  let prev;
   let line = 1;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     const top = stack[stack.length - 1];
     if (c === "\n") {
       line++;
-      if (state === "line-comment" || state === "'" || state === '"') state = "code";
+      if (state === "line-comment" || state === "'" || state === '"' || state === "regex") state = "code";
       if (state === "block-comment" || state === "code" && top === "template") result.add(line);
       continue;
     }
@@ -360,22 +362,42 @@ function nonCodeLines(text) {
     }
     if (state === "'" || state === '"') {
       if (c === "\\") i++;
-      else if (c === state) state = "code";
+      else if (c === state) {
+        state = "code";
+        prev = "a";
+      }
+      continue;
+    }
+    if (state === "regex") {
+      if (c === "\\") i++;
+      else if (c === "[") inClass = true;
+      else if (c === "]") inClass = false;
+      else if (c === "/" && !inClass) {
+        state = "code";
+        prev = "a";
+      }
       continue;
     }
     if (top === "template") {
       if (c === "\\") i++;
-      else if (c === "`") stack.pop();
-      else if (c === "$" && text[i + 1] === "{") {
+      else if (c === "`") {
+        stack.pop();
+        prev = "a";
+      } else if (c === "$" && text[i + 1] === "{") {
         stack.push(0);
+        prev = "{";
         i++;
       }
       continue;
     }
+    if (/\s/.test(c)) continue;
     if (c === "/" && text[i + 1] === "/") state = "line-comment";
     else if (c === "/" && text[i + 1] === "*") {
       state = "block-comment";
       i++;
+    } else if (c === "/" && startsRegex(text, i, prev)) {
+      state = "regex";
+      inClass = false;
     } else if (c === "'" || c === '"') state = c;
     else if (c === "`") stack.push("template");
     else if (typeof top === "number" && c === "{") stack[stack.length - 1] = top + 1;
@@ -383,8 +405,30 @@ function nonCodeLines(text) {
       if (top === 0) stack.pop();
       else stack[stack.length - 1] = top - 1;
     }
+    if (state === "code" && c !== "`") prev = c;
   }
   return result;
+}
+var BEFORE_REGEX_WORDS = /* @__PURE__ */ new Set([
+  "return",
+  "typeof",
+  "case",
+  "do",
+  "else",
+  "in",
+  "of",
+  "void",
+  "yield",
+  "await",
+  "delete",
+  "instanceof",
+  "new"
+]);
+function startsRegex(text, index, prev) {
+  if (prev === void 0 || "(,=:[!&|?{};+-*%<>~^".includes(prev)) return true;
+  if (!/[\w$]/.test(prev)) return false;
+  const word = /([\w$]+)\s*$/.exec(text.slice(Math.max(0, index - 20), index))?.[1];
+  return word !== void 0 && BEFORE_REGEX_WORDS.has(word);
 }
 function blankStrings(line) {
   let out = "";
@@ -2220,6 +2264,7 @@ var envMissingExample = {
         if (m) documented.add(m[1]);
       }
     }
+    const where2 = examples.length <= 3 ? examples.join(", ") : `any of ${examples.length} example env files`;
     const removedReads = new Set(
       ctx.files.flatMap((f) => {
         const read = envReader(f.oldPath);
@@ -2235,7 +2280,7 @@ var envMissingExample = {
         for (const name of new Set(read(l.text))) {
           if (documented.has(name) || removedReads.has(name) || isStandard(name)) continue;
           findings.push({
-            message: `Reads environment variable \`${name}\`, missing from ${examples.join(", ")}`,
+            message: `Reads environment variable \`${name}\`, missing from ${where2}`,
             locations: [{ path: file.path, line: l.newLine }],
             evidence: l.text.trim()
           });

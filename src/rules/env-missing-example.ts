@@ -33,6 +33,7 @@ export const envMissingExample: Rule = {
         if (m) documented.add(m[1]!);
       }
     }
+    const where = examples.length <= 3 ? examples.join(", ") : `any of ${examples.length} example env files`;
     // A read that was only moved from elsewhere in the diff is not new.
     const removedReads = new Set(
       ctx.files.flatMap((f) => {
@@ -51,7 +52,7 @@ export const envMissingExample: Rule = {
         for (const name of new Set(read(l.text))) {
           if (documented.has(name) || removedReads.has(name) || isStandard(name)) continue;
           findings.push({
-            message: `Reads environment variable \`${name}\`, missing from ${examples.join(", ")}`,
+            message: `Reads environment variable \`${name}\`, missing from ${where}`,
             locations: [{ path: file.path, line: l.newLine }],
             evidence: l.text.trim(),
           });

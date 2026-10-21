@@ -84,7 +84,7 @@ export function envVarReads(line: string): string[] {
       if (blank.startsWith(m[0].slice(0, 4), m.index)) names.push(m[1]!);
     }
   }
-  const d = ENV_DESTRUCTURE.exec(code);
+  const d = ENV_DESTRUCTURE.exec(blank);
   if (d) {
     for (const part of d[1]!.split(",")) {
       const name = /^\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(part)?.[1];
@@ -97,21 +97,25 @@ export function envVarReads(line: string): string[] {
 /**
  * 1-based numbers of the lines that start inside a template literal or a block
  * comment, such as source code embedded in a test as a string. A small scanner,
- * not a parser: regular expression literals are not recognized.
+ * not a parser: regular expression literals are told from division by the
+ * token before the slash.
  */
 export function nonCodeLines(text: string): Set<number> {
   const result = new Set<number>();
   // Each entry is a template literal or a `${` expression inside one.
   const stack: ("template" | number)[] = [];
-  let state: "code" | "line-comment" | "block-comment" | "'" | '"' = "code";
+  let state: "code" | "line-comment" | "block-comment" | "regex" | "'" | '"' = "code";
+  let inClass = false;
+  // Last significant character of code; "a" after a literal, which is a value.
+  let prev: string | undefined;
   let line = 1;
   for (let i = 0; i < text.length; i++) {
     const c = text[i]!;
     const top = stack[stack.length - 1];
     if (c === "\n") {
       line++;
-      // Quotes cannot span lines; resetting also recovers from a quote in a regex literal.
-      if (state === "line-comment" || state === "'" || state === '"') state = "code";
+      // Quotes and regular expressions cannot span lines; resetting limits the damage of a misread.
+      if (state === "line-comment" || state === "'" || state === '"' || state === "regex") state = "code";
       if (state === "block-comment" || (state === "code" && top === "template")) result.add(line);
       continue;
     }
@@ -125,32 +129,64 @@ export function nonCodeLines(text: string): Set<number> {
     }
     if (state === "'" || state === '"') {
       if (c === "\\") i++;
-      else if (c === state) state = "code";
+      else if (c === state) {
+        state = "code";
+        prev = "a";
+      }
+      continue;
+    }
+    if (state === "regex") {
+      if (c === "\\") i++;
+      else if (c === "[") inClass = true;
+      else if (c === "]") inClass = false;
+      else if (c === "/" && !inClass) {
+        state = "code";
+        prev = "a";
+      }
       continue;
     }
     if (top === "template") {
       if (c === "\\") i++;
-      else if (c === "`") stack.pop();
-      else if (c === "$" && text[i + 1] === "{") {
+      else if (c === "`") {
+        stack.pop();
+        prev = "a";
+      } else if (c === "$" && text[i + 1] === "{") {
         stack.push(0);
+        prev = "{";
         i++;
       }
       continue;
     }
+    if (/\s/.test(c)) continue;
     if (c === "/" && text[i + 1] === "/") state = "line-comment";
     else if (c === "/" && text[i + 1] === "*") {
       state = "block-comment";
       i++;
-    }
-    else if (c === "'" || c === '"') state = c;
+    } else if (c === "/" && startsRegex(text, i, prev)) {
+      state = "regex";
+      inClass = false;
+    } else if (c === "'" || c === '"') state = c;
     else if (c === "`") stack.push("template");
     else if (typeof top === "number" && c === "{") stack[stack.length - 1] = top + 1;
     else if (typeof top === "number" && c === "}") {
       if (top === 0) stack.pop();
       else stack[stack.length - 1] = top - 1;
     }
+    if (state === "code" && c !== "`") prev = c;
   }
   return result;
+}
+
+const BEFORE_REGEX_WORDS = new Set([
+  "return", "typeof", "case", "do", "else", "in", "of", "void", "yield", "await", "delete", "instanceof", "new",
+]);
+
+/** True when a slash at `index` starts a regular expression rather than a division. */
+function startsRegex(text: string, index: number, prev: string | undefined): boolean {
+  if (prev === undefined || "(,=:[!&|?{};+-*%<>~^".includes(prev)) return true;
+  if (!/[\w$]/.test(prev)) return false;
+  const word = /([\w$]+)\s*$/.exec(text.slice(Math.max(0, index - 20), index))?.[1];
+  return word !== undefined && BEFORE_REGEX_WORDS.has(word);
 }
 
 /**
