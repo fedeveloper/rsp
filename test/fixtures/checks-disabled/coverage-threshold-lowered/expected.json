@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "pyproject.toml", "line": 9, "message": "Coverage threshold went from 90 to 70", "evidence": "fail_under = 70"}
+]

@@ -28,7 +28,7 @@ it("gives every finding a distinct fingerprint and a reproduce command", () => {
     const fingerprints = report.findings.map((f) => f.fingerprint);
     assert.equal(new Set(fingerprints).size, fingerprints.length);
     for (const f of report.findings) {
-      assert.equal(f.reproduce, `npx rsp check --base ${repo.base} --head ${repo.head} --rule ${f.ruleId}`);
+      assert.equal(f.reproduce, `rsp check --base ${repo.base} --head ${repo.head} --rule ${f.ruleId}`);
     }
   } finally {
     repo.cleanup();

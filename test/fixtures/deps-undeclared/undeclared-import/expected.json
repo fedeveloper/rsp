@@ -1,0 +1,4 @@
+[
+  {"ruleId": "deps/undeclared", "path": "app/client.py", "line": 3, "message": "Imports `httpx`, not declared in pyproject.toml", "evidence": "import httpx"},
+  {"ruleId": "deps/undeclared", "path": "app/client.py", "line": 4, "message": "Imports `rich`, not declared in pyproject.toml", "evidence": "from rich.console import Console"}
+]

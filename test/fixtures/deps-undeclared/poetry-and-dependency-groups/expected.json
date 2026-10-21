@@ -1,0 +1,3 @@
+[
+  {"ruleId": "deps/undeclared", "path": "blog/tasks.py", "line": 4, "message": "Imports `celery`, not declared in pyproject.toml", "evidence": "from celery import shared_task"}
+]

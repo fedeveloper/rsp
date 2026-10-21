@@ -30,6 +30,8 @@ export interface DiffContext {
   readBase(path: string): string | undefined;
   /** File content at head, or undefined when absent. */
   readHead(path: string): string | undefined;
+  /** Every file path tracked at head, sorted. */
+  listHead(): string[];
 }
 
 export interface Location {
@@ -65,6 +67,8 @@ export interface Report {
   tool: { name: string; version: string };
   base: string;
   head: string;
+  /** Extra CLI flags the run used, such as `--exclude`. */
+  options: string[];
   rules: { id: string; version: string }[];
   findings: Finding[];
 }

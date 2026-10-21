@@ -1,0 +1,4 @@
+[
+  {"ruleId": "deps/undeclared", "path": "app/fast.py", "line": 4, "message": "Imports `colorama`, not declared in pyproject.toml", "evidence": "import colorama"},
+  {"ruleId": "deps/undeclared", "path": "app/fast.py", "line": 6, "message": "Imports `uvloop`, not declared in pyproject.toml", "evidence": "import uvloop"}
+]

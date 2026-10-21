@@ -1,0 +1,4 @@
+[
+  {"ruleId": "env/missing-example", "path": "app/flags.py", "line": 3, "message": "Reads environment variable `FEATURE_X`, missing from .env.example", "evidence": "X = getenv('FEATURE_X')"},
+  {"ruleId": "env/missing-example", "path": "app/flags.py", "line": 4, "message": "Reads environment variable `FEATURE_Y`, missing from .env.example", "evidence": "Y = environ.get('FEATURE_Y')"}
+]

@@ -1,0 +1,33 @@
+name: rsp
+description: Reports reproducible facts about risky changes in a pull request diff, without reviewing it with a model.
+author: fedeveloper
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  github-token:
+    description: Token used to write the pull request comment. Needs pull-requests write permission.
+    default: ${{ github.token }}
+  fail-on:
+    description: '"never" (default) only reports; "any" fails the step when there is at least one finding.'
+    default: never
+  exclude:
+    description: Globs of changed files to ignore, one per line or comma separated, e.g. tests/fixtures/**.
+    default: ""
+  rules:
+    description: Rule ids to run, one per line or comma separated. Empty runs every rule.
+    default: ""
+  comment:
+    description: '"true" (default) keeps one comment on the pull request up to date; "false" writes only the job summary.'
+    default: "true"
+
+outputs:
+  findings:
+    description: Number of findings.
+  report:
+    description: Path of the JSON report.
+
+runs:
+  using: node24
+  main: action-dist/index.js

@@ -1,0 +1,9 @@
+[project]
+name = "shop"
+dependencies = []
+
+[tool.pytest.ini_options]
+addopts = "-q --deselect tests/test_api.py::test_timeout"
+
+[tool.coverage.report]
+fail_under = 90

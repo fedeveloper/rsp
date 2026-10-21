@@ -16,8 +16,6 @@ jobs:
         node: [22, 24]
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -26,6 +24,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - name: Run rsp on this pull request
-        if: github.event_name == 'pull_request' && matrix.node == 24
-        run: node dist/cli.js check --base "origin/${{ github.base_ref }}" --head HEAD >> "$GITHUB_STEP_SUMMARY"
+      - name: Check the action bundle is up to date
+        run: npm run bundle && git diff --exit-code action-dist
+      - name: Check the evaluation results are up to date
+        run: npm run eval && git diff --exit-code eval/RESULTS.md

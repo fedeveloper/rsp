@@ -9,12 +9,15 @@ export interface CheckOptions {
   head?: string;
   /** Rule ids to run; all rules when omitted. */
   rules?: string[];
+  /** Globs of changed files to ignore, e.g. `tests/fixtures/**`. */
+  exclude?: string[];
 }
 
 export function check(opts: CheckOptions): Report {
   const rules = opts.rules ? selectRules(opts.rules) : ALL_RULES;
-  const ctx = buildContext(opts.repoDir, opts.base, opts.head ?? "HEAD");
-  return runRules(ctx, rules);
+  const exclude = [...new Set(opts.exclude ?? [])].sort();
+  const ctx = buildContext(opts.repoDir, opts.base, opts.head ?? "HEAD", exclude);
+  return runRules(ctx, rules, exclude.map((g) => `--exclude ${shellQuote(g)}`));
 }
 
 function selectRules(ids: string[]) {
@@ -23,6 +26,10 @@ function selectRules(ids: string[]) {
     throw new Error(`Unknown rule: ${unknown.join(", ")}. Known rules: ${ALL_RULES.map((r) => r.id).join(", ")}`);
   }
   return ALL_RULES.filter((r) => ids.includes(r.id));
+}
+
+function shellQuote(s: string): string {
+  return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 export { ALL_RULES } from "./rules/index.js";

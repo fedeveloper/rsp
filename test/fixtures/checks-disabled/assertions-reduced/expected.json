@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "tests/test_cart.py", "message": "Assertions in test file went from 3 to 1", "evidence": "assertions: 3 -> 1"}
+]
