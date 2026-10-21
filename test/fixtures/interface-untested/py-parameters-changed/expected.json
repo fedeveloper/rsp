@@ -1,0 +1,3 @@
+[
+  {"ruleId": "interface/untested-change", "path": "svc/config.py", "line": 1, "message": "Parameters of `load`: added `strict=False`; no test changed by the diff mentions it", "evidence": "def load(path, strict=False):"}
+]

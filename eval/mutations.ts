@@ -14,6 +14,7 @@ export interface Mutation {
 export const CD = "checks/disabled";
 export const DEP = "deps/undeclared";
 export const ENV = "env/missing-example";
+export const IF = "interface/untested-change";
 
 /** Replaces exactly one occurrence, so a mutation fails loudly if the project drifts. */
 export function replace(files: Files, path: string, from: string, to: string): void {
@@ -82,6 +83,13 @@ export const MUTATIONS: Mutation[] = [
   risky("dep-and-env", [DEP, ENV], "Import httpx and read HTTPX_TIMEOUT, neither declared", (f) =>
     replace(f, "inventory/client.py", "import requests\n", "import os\n\nimport httpx\nimport requests\n\nTIMEOUT = float(os.getenv(\"HTTPX_TIMEOUT\", \"10\"))\n")),
 
+  risky("param-added-untested", [IF], "Add a parameter to a public function without touching tests", (f) =>
+    replace(f, "inventory/client.py", "def fetch_prices(skus: list[str])", "def fetch_prices(skus: list[str], currency: str = \"EUR\")")),
+  risky("param-renamed-untested", [IF], "Rename a keyword parameter of a public method", (f) => {
+    replace(f, "inventory/store.py", "    def remove(self, sku: str, quantity: int) -> Item:\n        item = self._items[sku]\n        if quantity > item.quantity:", "    def remove(self, sku: str, amount: int) -> Item:\n        item = self._items[sku]\n        if amount > item.quantity:");
+    replace(f, "inventory/store.py", "quantity=item.quantity - quantity)", "quantity=item.quantity - amount)");
+  }),
+
   benign("rename-function", "Rename a function and its callers", (f) => {
     replace(f, "inventory/config.py", "def load_settings", "def read_settings");
     replace(f, "inventory/client.py", "from inventory.config import load_settings", "from inventory.config import read_settings");
@@ -124,6 +132,15 @@ export const MUTATIONS: Mutation[] = [
     replace(f, "inventory/client.py", "import requests\n", "try:\n    import ujson as json\nexcept ImportError:\n    import json\n\nimport requests\n")),
   benign("readme-mentions", "Document suppressions in the README", (f) =>
     replace(f, "README.md", "evaluation corpus.\n", "evaluation corpus.\n\nAvoid `# noqa` and `@pytest.mark.skip`; read config with `os.getenv(\"X\")`.\n")),
+  benign("param-added-with-test", "Add a parameter to Store.get and a test that uses it", (f) => {
+    replace(f, "inventory/store.py", "    def get(self, sku: str) -> Item | None:\n        return self._items.get(sku)", "    def get(self, sku: str, default: Item | None = None) -> Item | None:\n        return self._items.get(sku, default)");
+    replace(f, "tests/test_store.py", "from inventory.store import Store\n", "from inventory.store import Item, Store\n");
+    replace(f, "tests/test_store.py", "def test_remove_rejects_overdraw", "def test_get_returns_default():\n    fallback = Item(sku=\"kiwi\", quantity=0)\n    assert Store().get(\"kiwi\", default=fallback) == fallback\n\n\ndef test_remove_rejects_overdraw");
+  }),
+  benign("annotations-only", "Change only the type annotations of a public method", (f) =>
+    replace(f, "inventory/store.py", "    def add(self, sku: str, quantity: int) -> Item:", "    def add(self, sku: str, quantity: int | float) -> Item:")),
+  benign("signature-reformatted", "Split a signature over several lines", (f) =>
+    replace(f, "inventory/client.py", "def fetch_prices(skus: list[str])", "def fetch_prices(\n    skus: list[str],\n)")),
   benign("test-renamed", "Rename a test without changing its assertions", (f) =>
     replace(f, "tests/test_store.py", "def test_add_accumulates_quantity", "def test_add_sums_quantities")),
 ];

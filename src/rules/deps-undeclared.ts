@@ -2,7 +2,7 @@ import type { DiffContext, RawFinding, Rule } from "../types.js";
 import { isInTryBlock, importedSpecifiers, JS_FILE, nonCodeLines, packageName } from "./js.js";
 import { NODE_BUILTINS } from "./js-builtins.js";
 import { jsManifests } from "./js-manifests.js";
-import { importedModules, normalizeDist, optionalModules } from "./python.js";
+import { importedModules, normalizeDist, optionalModules, stringLines } from "./python.js";
 import { declaredDependencies } from "./python-manifests.js";
 import { PYTHON_STDLIB } from "./python-stdlib.js";
 
@@ -35,12 +35,14 @@ const KNOWN_DISTRIBUTIONS: Record<string, string[]> = {
   telegram: ["python-telegram-bot"],
   websocket: ["websocket-client"],
   yaml: ["pyyaml"],
+  _pytest: ["pytest"],
   zmq: ["pyzmq"],
 };
 
 export const depsUndeclared: Rule = {
   id: "deps/undeclared",
-  version: "0.2.0",
+  version: "0.3.0",
+  keys: "the imported module (Python) or package (JavaScript), e.g. `boto3`",
   description:
     "Python and JavaScript/TypeScript imports added in the diff whose package is not declared in a dependency manifest.",
   run(ctx) {
@@ -48,12 +50,16 @@ export const depsUndeclared: Rule = {
   },
 };
 
+const PYTHON_TEST_PATH = /(^|\/)(tests?|testing)\/|(^|\/)(test_[^/]*|[^/]*_test|conftest)\.py$/;
+const TEST_RUNNERS = new Set(["pytest", "_pytest"]);
+
 function python(ctx: DiffContext): RawFinding[] {
   const pyFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && f.path.endsWith(".py"));
   if (pyFiles.length === 0) return [];
   const declared = declaredDependencies(ctx);
-  // Without any manifest there is nothing to compare against.
-  if (declared.manifests.length === 0) return [];
+  // Without any manifest there is nothing to compare against, and with a
+  // computed one there is no complete list to compare against.
+  if (declared.manifests.length === 0 || declared.dynamic.length > 0) return [];
   const local = localModules(ctx.listHead());
   const where =
     declared.manifests.length <= 3
@@ -62,13 +68,19 @@ function python(ctx: DiffContext): RawFinding[] {
 
   const findings: RawFinding[] = [];
   for (const file of pyFiles) {
-    const optional = optionalModules((ctx.readHead(file.path) ?? "").split("\n"));
+    const text = ctx.readHead(file.path) ?? "";
+    const optional = optionalModules(text.split("\n"));
+    // Imports inside strings, such as test code written to a temporary file, are text.
+    const inStrings = stringLines(text);
+    // The test runner is what runs a test file; it is declared in tox.ini, CI or conda files as often as in a manifest.
+    const runners = PYTHON_TEST_PATH.test(file.path) ? TEST_RUNNERS : new Set<string>();
     for (const l of file.lines) {
-      if (l.kind !== "add") continue;
+      if (l.kind !== "add" || inStrings.has(l.newLine!)) continue;
       for (const mod of importedModules(l.text)) {
-        if (PYTHON_STDLIB.has(mod) || local.has(mod) || optional.has(mod)) continue;
+        if (PYTHON_STDLIB.has(mod) || local.has(mod) || optional.has(mod) || runners.has(mod)) continue;
         if (candidates(mod).some((c) => declared.names.has(c))) continue;
         findings.push({
+          key: mod,
           message: `Imports \`${mod}\`, not declared in ${where}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim(),
@@ -109,6 +121,7 @@ function javascript(ctx: DiffContext): RawFinding[] {
         if (packages.some((p) => p.names.has(name) || p.names.has(typesPackage(name)))) continue;
         if (isInTryBlock(lines, l.newLine! - 1)) continue;
         findings.push({
+          key: name,
           message: `Imports \`${name}\`, not declared in ${where}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim(),

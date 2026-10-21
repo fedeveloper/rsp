@@ -15,6 +15,8 @@ The name is not settled yet. The working expansion is "Reproducible Signals for 
 - Language: TypeScript on Node >= 22, ESM. The only runtime dependency is `smol-toml`. Tests use `node:test` with `tsx`.
 - Ecosystems: Python first, then JavaScript/TypeScript (v0.2).
 - Delivery: a JavaScript GitHub Action (`action.yml`, Node 24, bundled into `action-dist/`) and a CLI (`rsp check`), both thin wrappers around the same pure core.
+- Configuration: `.rsp.toml` (TOML, because `smol-toml` is already the one dependency), read from the base commit so a pull request cannot relax its own checks. Unknown keys, rules and pattern ids are errors. Each finding has a `key` that `allow` matches.
+- Test delta: rsp never runs tests itself in the core. `tests/delta` compares JUnit XML reports of base and head; the Action can run a `test-command` at both commits in git worktrees and rerun head to clear flaky failures.
 - License: Apache-2.0.
 - Releases are git tags `vX.Y.Z` on `main`. The version lives in `package.json` and `src/version.ts`, and a test keeps them in sync.
 - The maintainer writes in Italian. Code, comments, commits and docs in the repository are in English.
@@ -39,15 +41,19 @@ The name is not settled yet. The working expansion is "Reproducible Signals for 
 Passing our own tests proves consistency, not that a rule works on real code. Every rule change goes through all four layers:
 
 1. **Golden fixtures.** Add a case per new behaviour, positive and negative, with expectations written by hand before running the rule. Every case runs every rule, so a rule that fires on another rule's fixture fails too.
-2. **Labelled mutations** (`npm run eval`). Risky and benign changes applied to the sample Python project (`eval/mutations.ts`) and to the maintainer's real app, MTGO Collection Tracker, cloned at a pinned commit (`eval/mutations-mtgo.ts`). The results files are committed and CI fails if they change.
+2. **Labelled mutations** (`npm run eval`). Risky and benign changes applied to the sample Python project (`eval/mutations.ts`), to the maintainer's real app MTGO Collection Tracker, cloned at a pinned commit (`eval/mutations-mtgo.ts`), and to the maintainer's private Python game rogue (`eval/mutations-rogue.ts`, only with `RSP_EVAL_ROGUE=1` because CI cannot clone it). The results files are committed and CI fails if the first two change. `tests/delta` is covered by fixtures and Action tests instead, because it needs test runs.
 3. **Real history** (`eval/real-history.ts`). Run the rules on about 100 recent commits of several public projects and check each finding against git independently of the rules. Every false fact found there gets fixed and becomes a golden fixture. This layer is where all false facts so far were found: aliased `TYPE_CHECKING`, optional imports, CI matrix keys, imports inside template literals, helper files in test folders, eslint replaced by oxlint.
 4. **Action tests** against a fake GitHub API, including a run from the committed bundle.
+
+On top of these, `eval/swe-bench.ts` runs the rules on SWE-bench Lite: the human fix of each task and the patches of three agent submissions. It is a measurement, not a gate; rerun it when a rule changes and read the new findings. Its first run found more false facts: skip markers and imports inside Python strings, `setup.py` lists built in variables or imported from other modules, `pytest` in test files of projects that declare it outside manifests, methods defined twice, and a backslash-newline that shifted line numbers in the string scanners.
 
 After changing `src/`, run `npm run bundle` and commit `action-dist/`, because CI checks that it is up to date.
 
 ## Ideas not started
 
-- Per-pattern configuration, for example accepting `# type: ignore` in a typed codebase (`.rsp.yml`, read from the base commit).
-- Test delta: run the tests at base and head, and report tests that newly fail, disappeared or became skipped.
-- Interface changes without test updates.
-- An evaluation on AI-generated patches from public benchmarks such as SWE-bench.
+- Per-rule blocking: `fail-on` per rule or per key in `.rsp.toml`, instead of only `never` and `any`.
+- Interface changes beyond parameters: return annotations, removed public functions and classes.
+- More ecosystems (Go, Rust), each with its own manifests and suppressions.
+- Test delta without JUnit: read pytest and Vitest JSON reports directly.
+- Run `tests/delta` in the SWE-bench evaluation, using the task's test commands in the official Docker images.
+- If the repository becomes public, decide whether `eval/mutations-rogue.ts` and `eval/RESULTS-rogue.md`, which quote a private repository, stay.

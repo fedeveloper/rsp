@@ -17,6 +17,7 @@ const STANDARD_PREFIXES = ["GITHUB_", "RUNNER_", "LC_", "npm_"];
 export const envMissingExample: Rule = {
   id: "env/missing-example",
   version: "0.2.0",
+  keys: "the variable name, e.g. `AWS_REGION`",
   description:
     "Environment variables read in added Python or JavaScript/TypeScript code but missing from the example env file.",
   run(ctx) {
@@ -52,6 +53,7 @@ export const envMissingExample: Rule = {
         for (const name of new Set(read(l.text))) {
           if (documented.has(name) || removedReads.has(name) || isStandard(name)) continue;
           findings.push({
+            key: name,
             message: `Reads environment variable \`${name}\`, missing from ${where}`,
             locations: [{ path: file.path, line: l.newLine }],
             evidence: l.text.trim(),

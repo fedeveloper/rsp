@@ -16,6 +16,9 @@ Options:
   --format <fmt>    json or markdown (default: markdown)
   --rule <id>       Run only this rule; repeatable
   --exclude <glob>  Ignore changed files matching this glob; repeatable
+  --no-config       Ignore .rsp.toml in the base commit
+  --junit-base <f>  JUnit report of the tests run at base; repeatable
+  --junit-head <f>  JUnit report of the tests run at head; repeatable
   --list-rules      Print the available rules and exit
   --version         Print the version and exit
   --help            Print this help and exit
@@ -32,6 +35,9 @@ function main(argv: string[]): number {
       format: { type: "string", default: "markdown" },
       rule: { type: "string", multiple: true },
       exclude: { type: "string", multiple: true },
+      "no-config": { type: "boolean", default: false },
+      "junit-base": { type: "string", multiple: true },
+      "junit-head": { type: "string", multiple: true },
       "list-rules": { type: "boolean", default: false },
       version: { type: "boolean", default: false },
       help: { type: "boolean", default: false },
@@ -47,7 +53,10 @@ function main(argv: string[]): number {
     return 0;
   }
   if (values["list-rules"]) {
-    for (const r of ALL_RULES) process.stdout.write(`${r.id}@${r.version}\t${r.description}\n`);
+    for (const r of ALL_RULES) {
+      process.stdout.write(`${r.id}@${r.version}\t${r.description}\n  allow: ${r.keys}\n`);
+      if (r.knownKeys) process.stdout.write(`  known: ${r.knownKeys.join(", ")}\n`);
+    }
     return 0;
   }
   if (positionals[0] !== "check" || !values.base) {
@@ -59,7 +68,16 @@ function main(argv: string[]): number {
     return 2;
   }
 
-  const report = check({ repoDir: values.repo, base: values.base, head: values.head, rules: values.rule, exclude: values.exclude });
+  const report = check({
+    repoDir: values.repo,
+    base: values.base,
+    head: values.head,
+    rules: values.rule,
+    exclude: values.exclude,
+    config: !values["no-config"],
+    junitBase: values["junit-base"],
+    junitHead: values["junit-head"],
+  });
   process.stdout.write(values.format === "json" ? toJson(report) : toMarkdown(report));
   // Advisory by default: findings never change the exit code yet.
   return 0;

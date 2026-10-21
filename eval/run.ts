@@ -4,6 +4,9 @@
 //
 // Corpora: the sample Python project in eval/project (eval/RESULTS.md) and a
 // real JavaScript application cloned at a pinned commit (eval/RESULTS-mtgo.md).
+// A third corpus, the maintainer's private Python game rogue
+// (eval/RESULTS-rogue.md), runs only when RSP_EVAL_ROGUE=1, because CI cannot
+// clone it.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -14,6 +17,7 @@ import { VERSION } from "../src/version.js";
 import { makeRepoFromTrees } from "../test/helpers.js";
 import { type Files, MUTATIONS, type Mutation } from "./mutations.js";
 import { MTGO_COMMIT, MTGO_MUTATIONS, MTGO_REPO } from "./mutations-mtgo.js";
+import { ROGUE_COMMIT, ROGUE_MUTATIONS, ROGUE_REPO } from "./mutations-rogue.js";
 
 interface Corpus {
   /** What the mutations are applied to, as a sentence fragment for the report. */
@@ -32,7 +36,7 @@ interface Outcome {
   unexpected: string[];
 }
 
-/** Files of a public repository at a commit, cloned once into eval/.cache. */
+/** Files of a repository at a commit, cloned once into eval/.cache. */
 function readRepo(url: string, commit: string): Files {
   const dir = join(import.meta.dirname, ".cache", url.split("/").pop()!);
   const git = (args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", maxBuffer: 1 << 26 });
@@ -154,6 +158,17 @@ const corpora: Corpus[] = [
     results: join(import.meta.dirname, "RESULTS-mtgo.md"),
   },
 ];
+if (process.env.RSP_EVAL_ROGUE === "1") {
+  corpora.push({
+    describe:
+      `[rogue](${ROGUE_REPO}) at commit \`${ROGUE_COMMIT.slice(0, 12)}\`, a real terminal game in plain Python with ` +
+      "no dependency manifest, tests or CI, cloned at run time",
+    source: "eval/mutations-rogue.ts",
+    files: readRepo(ROGUE_REPO, ROGUE_COMMIT),
+    mutations: ROGUE_MUTATIONS,
+    results: join(import.meta.dirname, "RESULTS-rogue.md"),
+  });
+}
 
 let failures = 0;
 for (const corpus of corpora) {

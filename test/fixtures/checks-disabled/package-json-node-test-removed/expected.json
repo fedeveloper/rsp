@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "package.json", "message": "Removed package.json script `test`, which ran `node --test`", "evidence": "\"test\": \"node --test\""}
+]

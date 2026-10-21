@@ -1,0 +1,10 @@
+# Accepted in this codebase
+[rules."checks/disabled"]
+allow = ["type-ignore"]
+exclude = ["scripts/**"]
+
+[rules."deps/undeclared"]
+allow = ["boto3"]
+
+[rules."env/missing-example"]
+enabled = false

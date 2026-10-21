@@ -1,0 +1,4 @@
+[
+  {"ruleId": "deps/undeclared", "path": "svc/app.py", "line": 4, "message": "Imports `httpx`, not declared in pyproject.toml", "evidence": "import httpx"},
+  {"ruleId": "checks/disabled", "path": "svc/app.py", "line": 8, "message": "Added noqa comment", "evidence": "y = 1  # noqa: E501"}
+]

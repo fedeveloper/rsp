@@ -1,933 +1,9 @@
 // src/action.ts
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, readFileSync as readFileSync3, writeFileSync } from "node:fs";
+import { join as join2 } from "node:path";
 
-// src/diff.ts
-var HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
-function parseUnifiedDiff(text) {
-  const files = [];
-  let current;
-  let oldLine = 0;
-  let newLine = 0;
-  let inHunk = false;
-  for (const raw of text.split("\n")) {
-    if (raw.startsWith("diff --git ")) {
-      const [oldPath, newPath] = splitGitHeader(raw.slice("diff --git ".length));
-      current = { path: newPath, oldPath, status: "modified", binary: false, lines: [] };
-      files.push(current);
-      inHunk = false;
-      continue;
-    }
-    if (!current) continue;
-    if (inHunk) {
-      if (raw.startsWith("+")) {
-        current.lines.push({ kind: "add", text: raw.slice(1), newLine: newLine++ });
-        continue;
-      }
-      if (raw.startsWith("-")) {
-        current.lines.push({ kind: "del", text: raw.slice(1), oldLine: oldLine++ });
-        continue;
-      }
-      if (raw.startsWith(" ")) {
-        oldLine++;
-        newLine++;
-        continue;
-      }
-      if (raw.startsWith("\\")) continue;
-      inHunk = false;
-    }
-    const hunk = HUNK_HEADER.exec(raw);
-    if (hunk) {
-      oldLine = Number(hunk[1]);
-      newLine = Number(hunk[2]);
-      inHunk = true;
-    } else if (raw.startsWith("new file mode")) {
-      current.status = "added";
-    } else if (raw.startsWith("deleted file mode")) {
-      current.status = "deleted";
-    } else if (raw.startsWith("rename from ")) {
-      current.status = "renamed";
-      current.oldPath = unquote(raw.slice("rename from ".length));
-    } else if (raw.startsWith("rename to ")) {
-      current.status = "renamed";
-      current.path = unquote(raw.slice("rename to ".length));
-    } else if (raw.startsWith("Binary files ")) {
-      current.binary = true;
-    } else if (raw.startsWith("--- ")) {
-      const p = raw.slice(4);
-      if (p !== "/dev/null") current.oldPath = stripPrefix(unquote(p), "a/");
-    } else if (raw.startsWith("+++ ")) {
-      const p = raw.slice(4);
-      if (p !== "/dev/null") current.path = stripPrefix(unquote(p), "b/");
-    }
-  }
-  for (const f of files) {
-    if (f.status === "deleted") f.path = f.oldPath;
-  }
-  return files;
-}
-function splitGitHeader(rest) {
-  if (rest.startsWith('"')) {
-    const end = closingQuote(rest);
-    const oldPath = unquote(rest.slice(0, end + 1));
-    const newPath = unquote(rest.slice(end + 2));
-    return [stripPrefix(oldPath, "a/"), stripPrefix(newPath, "b/")];
-  }
-  const half = (rest.length - 1) / 2;
-  if (Number.isInteger(half) && rest[half] === " ") {
-    const oldPath = rest.slice(0, half);
-    const newPath = rest.slice(half + 1);
-    if (oldPath.slice(2) === newPath.slice(2)) {
-      return [stripPrefix(oldPath, "a/"), stripPrefix(newPath, "b/")];
-    }
-  }
-  const idx = rest.indexOf(" b/");
-  return [stripPrefix(rest.slice(0, idx), "a/"), stripPrefix(rest.slice(idx + 1), "b/")];
-}
-function closingQuote(s) {
-  for (let i = 1; i < s.length; i++) {
-    if (s[i] === "\\") i++;
-    else if (s[i] === '"') return i;
-  }
-  return s.length - 1;
-}
-var ESCAPES = { n: "\n", t: "	", '"': '"', "\\": "\\" };
-function unquote(p) {
-  if (!p.startsWith('"') || !p.endsWith('"')) return p;
-  const body = p.slice(1, -1);
-  const bytes = [];
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i];
-    if (c !== "\\") {
-      bytes.push(...Buffer.from(c, "utf8"));
-      continue;
-    }
-    const next = body[++i];
-    if (/[0-7]/.test(next)) {
-      bytes.push(parseInt(body.slice(i, i + 3), 8));
-      i += 2;
-    } else {
-      bytes.push(...Buffer.from(ESCAPES[next] ?? next, "utf8"));
-    }
-  }
-  return Buffer.from(bytes).toString("utf8");
-}
-function stripPrefix(p, prefix) {
-  return p.startsWith(prefix) ? p.slice(prefix.length) : p;
-}
-
-// src/git.ts
-import { execFileSync } from "node:child_process";
-var STABLE_CONFIG = [
-  "-c",
-  "core.quotePath=false",
-  "-c",
-  "diff.noprefix=false",
-  "-c",
-  "diff.mnemonicPrefix=false",
-  "-c",
-  "diff.renames=true"
-];
-function git(repoDir, args) {
-  return execFileSync("git", [...STABLE_CONFIG, ...args], {
-    cwd: repoDir,
-    encoding: "utf8",
-    maxBuffer: 256 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-}
-function resolveCommit(repoDir, ref) {
-  return git(repoDir, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]).trim();
-}
-function mergeBase(repoDir, a, b) {
-  return git(repoDir, ["merge-base", a, b]).trim();
-}
-function diff(repoDir, base, head) {
-  return git(repoDir, [
-    "diff",
-    "--no-color",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--find-renames",
-    "--unified=0",
-    base,
-    head
-  ]);
-}
-function readAt(repoDir, commit, path) {
-  try {
-    return git(repoDir, ["show", `${commit}:${path}`]);
-  } catch {
-    return void 0;
-  }
-}
-function listFiles(repoDir, commit) {
-  return git(repoDir, ["ls-tree", "-r", "-z", "--name-only", commit]).split("\0").filter((p) => p.length > 0).sort();
-}
-
-// src/glob.ts
-function globToRegExp(glob) {
-  let re = "";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
-    if (c === "*" && glob[i + 1] === "*") {
-      if (glob[i + 2] === "/") {
-        re += "(?:.*/)?";
-        i += 2;
-      } else {
-        re += ".*";
-        i += 1;
-      }
-    } else if (c === "*") {
-      re += "[^/]*";
-    } else if (c === "?") {
-      re += "[^/]";
-    } else {
-      re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  return new RegExp(`^${re}$`);
-}
-
-// src/context.ts
-function buildContext(repoDir, baseRef, headRef, exclude = []) {
-  const head = resolveCommit(repoDir, headRef);
-  const base = mergeBase(repoDir, resolveCommit(repoDir, baseRef), head);
-  const excluded = exclude.map(globToRegExp);
-  const files = parseUnifiedDiff(diff(repoDir, base, head)).filter(
-    (f) => !excluded.some((re) => re.test(f.path) || re.test(f.oldPath))
-  );
-  const cache = /* @__PURE__ */ new Map();
-  const read = (commit, path) => {
-    const key = `${commit}:${path}`;
-    if (!cache.has(key)) cache.set(key, readAt(repoDir, commit, path));
-    return cache.get(key);
-  };
-  let headFiles;
-  return {
-    repoDir,
-    base,
-    head,
-    files,
-    readBase: (path) => read(base, path),
-    readHead: (path) => read(head, path),
-    listHead: () => headFiles ??= listFiles(repoDir, head)
-  };
-}
-
-// src/engine.ts
-import { createHash } from "node:crypto";
-
-// src/version.ts
-var VERSION = "0.2.0";
-
-// src/engine.ts
-function runRules(ctx, rules, options = []) {
-  const opts = options.map((o) => ` ${o}`).join("");
-  const findings = [];
-  for (const rule of rules) {
-    for (const raw of rule.run(ctx)) {
-      findings.push({
-        ruleId: rule.id,
-        ruleVersion: rule.version,
-        message: raw.message,
-        locations: raw.locations,
-        evidence: raw.evidence,
-        fingerprint: "",
-        reproduce: `rsp check --base ${ctx.base} --head ${ctx.head}${opts} --rule ${rule.id}`
-      });
-    }
-  }
-  findings.sort(compareFindings);
-  assignFingerprints(findings);
-  return {
-    tool: { name: "rsp", version: VERSION },
-    base: ctx.base,
-    head: ctx.head,
-    options,
-    rules: rules.map((r) => ({ id: r.id, version: r.version })).sort((a, b) => cmp(a.id, b.id)),
-    findings
-  };
-}
-function compareFindings(a, b) {
-  const la = a.locations[0];
-  const lb = b.locations[0];
-  return cmp(la?.path ?? "", lb?.path ?? "") || (la?.line ?? 0) - (lb?.line ?? 0) || cmp(a.ruleId, b.ruleId) || cmp(a.message, b.message);
-}
-function assignFingerprints(findings) {
-  const seen = /* @__PURE__ */ new Map();
-  for (const f of findings) {
-    const key = [f.ruleId, f.locations[0]?.path ?? "", f.evidence.trim()].join("\0");
-    const n = seen.get(key) ?? 0;
-    seen.set(key, n + 1);
-    const hash = createHash("sha256").update(`${key}\0${n}`).digest("hex");
-    f.fingerprint = hash.slice(0, 16);
-  }
-}
-function cmp(a, b) {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-// src/rules/js.ts
-var JS_FILE = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts|vue|svelte)$/;
-var STATIC_IMPORTS = [
-  /^\s*import\s+(?:type\s+)?[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/,
-  /^\s*import\s*['"]([^'"]+)['"]/,
-  /^\s*export\s+(?:type\s+)?[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/,
-  // Closing line of a multi-line import or export: `} from "pkg";`
-  /^\s*\}\s*from\s*['"]([^'"]+)['"]/
-];
-var REQUIRE = /(?<![\w.$])require\(\s*['"]([^'"]+)['"]\s*\)/g;
-function importedSpecifiers(line) {
-  if (isCommentLine(line)) return [];
-  const specs = [];
-  for (const re of STATIC_IMPORTS) {
-    const m = re.exec(line);
-    if (m) specs.push(m[1]);
-  }
-  const code2 = blankStrings(line);
-  for (const m of line.matchAll(REQUIRE)) {
-    if (code2.startsWith("require(", m.index)) specs.push(m[1]);
-  }
-  return specs;
-}
-function packageName(spec) {
-  if (/^[./]/.test(spec) || spec.includes(":") || /^[#~$]/.test(spec) || spec.startsWith("@/")) return void 0;
-  const parts = spec.split("/");
-  const name = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
-  return /^(@[\w.-]+\/)?[\w.-]+$/.test(name) ? name : void 0;
-}
-function isInTryBlock(lines, index) {
-  let indent = indentation(lines[index] ?? "");
-  for (let i = index - 1; i >= 0 && indent > 0; i--) {
-    const l = lines[i];
-    if (l.trim() === "" || isCommentLine(l)) continue;
-    const ind = indentation(l);
-    if (ind < indent) {
-      if (/^(\}\s*)?(try|catch\b[^{]*)\s*\{\s*$/.test(l.trim())) return true;
-      indent = ind;
-    }
-  }
-  return false;
-}
-var ENV_READS = [
-  /\b(?:process\.env|import\.meta\.env|Bun\.env)\??\.([A-Za-z_][A-Za-z0-9_]*)\b(?!\s*(?:=[^=]|\?\?=|\|\|=|&&=))/g,
-  /\b(?:process\.env|import\.meta\.env|Bun\.env)\??\.?\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\](?!\s*(?:=[^=]|\?\?=|\|\|=|&&=))/g,
-  /\bDeno\.env\.get\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]/g
-];
-var ENV_DESTRUCTURE = /\{([^{}]*)\}\s*=\s*(?:process\.env|import\.meta\.env|Bun\.env)\b/;
-var VITE_BUILTINS = /* @__PURE__ */ new Set(["MODE", "BASE_URL", "PROD", "DEV", "SSR"]);
-function envVarReads(line) {
-  if (isCommentLine(line)) return [];
-  const code2 = line.replace(/\/\/.*$/, "");
-  const blank = blankStrings(code2);
-  const names = [];
-  for (const re of ENV_READS) {
-    for (const m of code2.matchAll(re)) {
-      if (blank.startsWith(m[0].slice(0, 4), m.index)) names.push(m[1]);
-    }
-  }
-  const d = ENV_DESTRUCTURE.exec(blank);
-  if (d) {
-    for (const part of d[1].split(",")) {
-      const name = /^\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(part)?.[1];
-      if (name) names.push(name);
-    }
-  }
-  return code2.includes("import.meta.env") ? names.filter((n) => !VITE_BUILTINS.has(n)) : names;
-}
-function nonCodeLines(text) {
-  const result = /* @__PURE__ */ new Set();
-  const stack = [];
-  let state = "code";
-  let inClass = false;
-  let prev;
-  let line = 1;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    const top = stack[stack.length - 1];
-    if (c === "\n") {
-      line++;
-      if (state === "line-comment" || state === "'" || state === '"' || state === "regex") state = "code";
-      if (state === "block-comment" || state === "code" && top === "template") result.add(line);
-      continue;
-    }
-    if (state === "line-comment") continue;
-    if (state === "block-comment") {
-      if (c === "*" && text[i + 1] === "/") {
-        state = "code";
-        i++;
-      }
-      continue;
-    }
-    if (state === "'" || state === '"') {
-      if (c === "\\") i++;
-      else if (c === state) {
-        state = "code";
-        prev = "a";
-      }
-      continue;
-    }
-    if (state === "regex") {
-      if (c === "\\") i++;
-      else if (c === "[") inClass = true;
-      else if (c === "]") inClass = false;
-      else if (c === "/" && !inClass) {
-        state = "code";
-        prev = "a";
-      }
-      continue;
-    }
-    if (top === "template") {
-      if (c === "\\") i++;
-      else if (c === "`") {
-        stack.pop();
-        prev = "a";
-      } else if (c === "$" && text[i + 1] === "{") {
-        stack.push(0);
-        prev = "{";
-        i++;
-      }
-      continue;
-    }
-    if (/\s/.test(c)) continue;
-    if (c === "/" && text[i + 1] === "/") state = "line-comment";
-    else if (c === "/" && text[i + 1] === "*") {
-      state = "block-comment";
-      i++;
-    } else if (c === "/" && startsRegex(text, i, prev)) {
-      state = "regex";
-      inClass = false;
-    } else if (c === "'" || c === '"') state = c;
-    else if (c === "`") stack.push("template");
-    else if (typeof top === "number" && c === "{") stack[stack.length - 1] = top + 1;
-    else if (typeof top === "number" && c === "}") {
-      if (top === 0) stack.pop();
-      else stack[stack.length - 1] = top - 1;
-    }
-    if (state === "code" && c !== "`") prev = c;
-  }
-  return result;
-}
-var BEFORE_REGEX_WORDS = /* @__PURE__ */ new Set([
-  "return",
-  "typeof",
-  "case",
-  "do",
-  "else",
-  "in",
-  "of",
-  "void",
-  "yield",
-  "await",
-  "delete",
-  "instanceof",
-  "new"
-]);
-function startsRegex(text, index, prev) {
-  if (prev === void 0 || "(,=:[!&|?{};+-*%<>~^".includes(prev)) return true;
-  if (!/[\w$]/.test(prev)) return false;
-  const word = /([\w$]+)\s*$/.exec(text.slice(Math.max(0, index - 20), index))?.[1];
-  return word !== void 0 && BEFORE_REGEX_WORDS.has(word);
-}
-function blankStrings(line) {
-  let out = "";
-  let quote;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (quote) {
-      if (c === "\\") {
-        out += "  ";
-        i++;
-      } else if (c === quote) {
-        out += c;
-        quote = void 0;
-      } else if (quote === "`" && c === "$" && line[i + 1] === "{") {
-        const end = closingBrace(line, i + 2);
-        out += line.slice(i, end + 1);
-        i = end;
-      } else {
-        out += " ";
-      }
-    } else if (c === "/" && (line[i + 1] === "/" || line[i + 1] === "*")) {
-      return out + line.slice(i);
-    } else {
-      if (c === "'" || c === '"' || c === "`") quote = c;
-      out += c;
-    }
-  }
-  return out;
-}
-function closingBrace(line, from) {
-  let depth = 0;
-  for (let i = from; i < line.length; i++) {
-    if (line[i] === "{") depth++;
-    else if (line[i] === "}" && depth-- === 0) return i;
-  }
-  return line.length - 1;
-}
-function isCommentLine(line) {
-  return /^\s*(\/\/|\/\*|\*)/.test(line);
-}
-function indentation(line) {
-  return line.length - line.trimStart().length;
-}
-
-// src/rules/checks-disabled.ts
-var PYTHON_PATTERNS = [
-  { label: "pytest skip marker", regex: /@pytest\.mark\.skip(if)?\b/ },
-  { label: "pytest xfail marker", regex: /@pytest\.mark\.xfail\b/ },
-  { label: "pytest.skip() call", regex: /\bpytest\.skip\s*\(/ },
-  { label: "unittest skip decorator", regex: /@unittest\.(skip|skipIf|skipUnless|expectedFailure)\b/ },
-  { label: "noqa comment", regex: /#\s*noqa\b/i },
-  { label: "type: ignore comment", regex: /#\s*type:\s*ignore\b/ },
-  { label: "pylint disable comment", regex: /#\s*pylint:\s*disable\b/ },
-  { label: "coverage exclusion", regex: /#\s*pragma:\s*no\s*cover\b/ },
-  { label: "bandit nosec comment", regex: /#\s*nosec\b/ }
-];
-var JS_PATTERNS = [
-  { label: "eslint-disable comment", regex: /(\/\/|\/\*)\s*(eslint|oxlint)-disable\b/ },
-  { label: "@ts-ignore comment", regex: /(\/\/|\/\*)\s*@ts-ignore\b/ },
-  { label: "@ts-nocheck comment", regex: /(\/\/|\/\*)\s*@ts-nocheck\b/ },
-  { label: "@ts-expect-error comment", regex: /(\/\/|\/\*)\s*@ts-expect-error\b/ },
-  { label: "biome-ignore comment", regex: /(\/\/|\/\*)\s*biome-ignore\b/ },
-  { label: "coverage exclusion", regex: /(\/\/|\/\*)\s*(istanbul|c8|v8)\s+ignore\b/ }
-];
-var JS_TEST_PATTERNS = [
-  { label: "skipped test (`.skip`)", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.(skip|skipIf|fixme)\b/ },
-  { label: "focused test (`.only`), which skips the others", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.only\b/ },
-  { label: "skipped test (`x` prefix)", regex: /(^|[^\w.$])x(describe|it|test|context)\s*\(/ }
-];
-var WORKFLOW_PATTERNS = [
-  { label: "continue-on-error: true", regex: /^\s*continue-on-error:\s*true\b/ },
-  { label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
-  { label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ },
-  { label: "step or job disabled with `if: false`", regex: /^\s*-?\s*if:\s*(false|\$\{\{\s*false\s*\}\})\s*$/ }
-];
-var TEST_CONFIG_PATTERNS = [
-  { label: "pytest option that excludes tests", regex: /--deselect\b|--ignore(-glob)?\b|(^|\s)-p\s+no:/ }
-];
-var PACKAGE_JSON_PATTERNS = [
-  { label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
-  { label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ }
-];
-var TSCONFIG_PATTERNS = [
-  {
-    label: "TypeScript check turned off",
-    regex: /"(strict|noImplicitAny|strictNullChecks|strictFunctionTypes|strictBindCallApply|noImplicitThis|alwaysStrict|noImplicitReturns|noUnusedLocals|noUnusedParameters|noUncheckedIndexedAccess|noFallthroughCasesInSwitch)"\s*:\s*false\b/
-  }
-];
-var ESLINT_CONFIG_PATTERNS = [
-  { label: "ESLint rule turned off", regex: /['"]?[\w@/-]+['"]?\s*:\s*\[?\s*(['"]off['"]|0\s*[,\]}]|0\s*$)/ }
-];
-var CHECK_KIND = {
-  pytest: "test",
-  unittest: "test",
-  tox: "test",
-  nox: "test",
-  jest: "test",
-  vitest: "test",
-  mocha: "test",
-  ava: "test",
-  playwright: "test",
-  cypress: "test",
-  "test script": "test",
-  ruff: "lint",
-  flake8: "lint",
-  pylint: "lint",
-  eslint: "lint",
-  oxlint: "lint",
-  biome: "lint",
-  "lint script": "lint",
-  mypy: "types",
-  pyright: "types",
-  tsc: "types",
-  "typecheck script": "types",
-  "type-check script": "types",
-  black: "format",
-  isort: "format",
-  prettier: "format"
-};
-var CHECK_COMMAND = new RegExp(
-  "\\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome)\\b|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b"
-);
-var CHECK_COMMAND_ALL = new RegExp(CHECK_COMMAND.source, "g");
-var COVERAGE_THRESHOLD = /(?:fail_under|fail-under|--cov-fail-under)\s*[=:]?\s*["']?(\d+(?:\.\d+)?)/;
-var PYTHON_ASSERTION = /^\s*assert\b|\bself\.assert[A-Z]\w*\(|\bpytest\.raises\(/;
-var JS_ASSERTION = /\bexpect\(|(^|[^\w.$])assert(\.\w+)?\(|\bt\.(is|not|deepEqual|true|false|throws|equal|ok)\(/;
-var PYTHON_TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/;
-var JS_TEST_NAME = /\.(test|spec|e2e|test-d|tst)\.[cm]?[jt]sx?$/;
-var JS_TEST_DIR = /(^|\/)(__tests__|tests?|e2e|cypress|spec)\/.*\.[cm]?[jt]sx?$/;
-var JS_TEST_CALL = /(^|[^\w.$])(describe|it|test)\s*\(/;
-var WORKFLOW_FILE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
-var TEST_CONFIG_FILE = /(^|\/)(pyproject\.toml|setup\.cfg|pytest\.ini|tox\.ini|\.coveragerc)$/;
-var TSCONFIG_FILE = /(^|\/)[jt]sconfig[\w.-]*\.json$/;
-var ESLINT_CONFIG_FILE = /(^|\/)(eslint\.config\.[cm]?[jt]s|\.eslintrc(\.(json|js|cjs|yml|yaml))?)$/;
-var checksDisabled = {
-  id: "checks/disabled",
-  version: "0.3.0",
-  description: "Checks that were removed or switched off: deleted test files, fewer assertions, skip markers, lint and type suppressions, CI steps or package.json scripts removed or allowed to fail, lower coverage thresholds, TypeScript and ESLint checks turned off.",
-  run(ctx) {
-    const findings = [];
-    const removedSource = multiset(ctx.files.filter((f) => isSource(f.path) || isSource(f.oldPath)), "del");
-    for (const file of ctx.files) {
-      if (file.binary) continue;
-      if (file.path.endsWith(".py")) findings.push(...pythonFile(file, removedSource));
-      if (JS_FILE.test(file.path)) findings.push(...jsFile(ctx, file, removedSource));
-      if (WORKFLOW_FILE.test(file.path)) findings.push(...workflowFile(file));
-      if (TEST_CONFIG_FILE.test(file.path)) findings.push(...testConfigFile(ctx, file));
-      if (file.path.split("/").pop() === "package.json") findings.push(...packageJsonFile(ctx, file));
-      if (TSCONFIG_FILE.test(file.path)) findings.push(...matchAdded(file, TSCONFIG_PATTERNS));
-      if (ESLINT_CONFIG_FILE.test(file.path)) findings.push(...matchAdded(file, ESLINT_CONFIG_PATTERNS));
-    }
-    findings.push(...fewerAssertions(ctx));
-    return findings;
-  }
-};
-function pythonFile(file, removed) {
-  if (file.status === "deleted") {
-    return PYTHON_TEST_FILE.test(file.path) ? [{ message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }] : [];
-  }
-  return matchAdded(file, PYTHON_PATTERNS, removed);
-}
-function jsFile(ctx, file, removed) {
-  if (file.status === "deleted") {
-    return isJsTestFile(file.path, ctx.readBase(file.path)) ? [{ message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }] : [];
-  }
-  const inTests = JS_TEST_NAME.test(file.path) || JS_TEST_DIR.test(file.path);
-  const patterns = inTests ? [...JS_PATTERNS.filter((p) => !p.label.startsWith("@ts-expect-error")), ...JS_TEST_PATTERNS] : JS_PATTERNS;
-  const nonCode = nonCodeLines(ctx.readHead(file.path) ?? "");
-  return matchAdded(file, patterns, removed, (l) => nonCode.has(l.newLine) ? "" : blankStrings(l.text));
-}
-function packageJsonFile(ctx, file) {
-  const findings = matchAdded(file, PACKAGE_JSON_PATTERNS);
-  if (file.status === "deleted") return findings;
-  const before = scripts(ctx.readBase(file.oldPath));
-  const after = scripts(ctx.readHead(file.path));
-  if (!before || !after) return findings;
-  const stillRun = new Set(Object.values(after).flatMap(checkCommands).map(kind));
-  const lines = (ctx.readHead(file.path) ?? "").split("\n");
-  for (const [name, command] of Object.entries(before)) {
-    const lost = checkCommands(command).filter((c) => !stillRun.has(kind(c)));
-    if (lost.length === 0) continue;
-    const now = after[name];
-    const index = lines.findIndex((l) => l.trimStart().startsWith(`${JSON.stringify(name)}:`));
-    findings.push(
-      now === void 0 ? {
-        message: `Removed package.json script \`${name}\`, which ran ${lost.map((c) => `\`${c}\``).join(", ")}`,
-        locations: [{ path: file.path }],
-        evidence: `"${name}": ${JSON.stringify(command)}`
-      } : {
-        message: `package.json script \`${name}\` no longer runs ${lost.map((c) => `\`${c}\``).join(", ")}`,
-        locations: [{ path: file.path, line: index >= 0 ? index + 1 : void 0 }],
-        evidence: index >= 0 ? lines[index].trim() : `"${name}": ${JSON.stringify(now)}`
-      }
-    );
-  }
-  return findings;
-}
-function scripts(text) {
-  try {
-    const json = JSON.parse(text ?? "");
-    return Object.fromEntries(Object.entries(json.scripts ?? {}).filter((e) => typeof e[1] === "string"));
-  } catch {
-    return void 0;
-  }
-}
-function fewerAssertions(ctx) {
-  const tests = ctx.files.filter(
-    (f) => !f.binary && (isTestFile(f.path, ctx.readHead(f.path)) || isTestFile(f.oldPath, ctx.readBase(f.oldPath)))
-  );
-  const counts = tests.map((f) => ({
-    file: f,
-    before: f.status === "added" ? 0 : countAssertions(f.oldPath, ctx.readBase(f.oldPath)),
-    after: f.status === "deleted" ? 0 : countAssertions(f.path, ctx.readHead(f.path))
-  }));
-  const total = (k) => counts.reduce((n, c) => n + c[k], 0);
-  if (total("after") >= total("before")) return [];
-  return counts.filter((c) => c.file.status !== "added" && c.file.status !== "deleted" && c.after < c.before).map((c) => ({
-    message: `Assertions in test file went from ${c.before} to ${c.after}`,
-    locations: [{ path: c.file.path }],
-    evidence: `assertions: ${c.before} -> ${c.after}`
-  }));
-}
-function workflowFile(file) {
-  const findings = matchAdded(file, WORKFLOW_PATTERNS);
-  const addedKinds = new Set(
-    file.lines.filter((l) => l.kind === "add").flatMap((l) => checkCommands(l.text).map(kind))
-  );
-  for (const l of file.lines) {
-    if (l.kind !== "del") continue;
-    const command = isShellLine(l.text) ? checkCommands(l.text)[0] : void 0;
-    if (!command || addedKinds.has(kind(command))) continue;
-    const what = file.status === "deleted" ? "Workflow running a check deleted" : "Removed CI line running a check";
-    findings.push({
-      // Removed lines exist only in base, so the line number is given as a base line.
-      message: `${what} (base line ${l.oldLine})`,
-      locations: [{ path: file.oldPath }],
-      evidence: l.text.trim()
-    });
-  }
-  return findings;
-}
-function testConfigFile(ctx, file) {
-  const findings = matchAdded(file, TEST_CONFIG_PATTERNS);
-  const before = threshold(ctx.readBase(file.oldPath));
-  const after = threshold(ctx.readHead(file.path));
-  if (before !== void 0 && (after === void 0 || after < before)) {
-    const line = file.lines.find((l) => l.kind === "add" && COVERAGE_THRESHOLD.test(l.text));
-    findings.push({
-      message: `Coverage threshold went from ${before} to ${after ?? "none"}`,
-      locations: [{ path: file.path, line: line?.newLine }],
-      evidence: line?.text.trim() ?? `coverage threshold: ${before} -> none`
-    });
-  }
-  return findings;
-}
-function matchAdded(file, patterns, removed = multiset([file], "del"), code2 = (l) => l.text) {
-  const findings = [];
-  for (const l of file.lines) {
-    if (l.kind !== "add" || take(removed, l.text.trim())) continue;
-    for (const p of patterns) {
-      if (p.regex.test(code2(l))) {
-        findings.push({
-          message: `Added ${p.label}`,
-          locations: [{ path: file.path, line: l.newLine }],
-          evidence: l.text.trim()
-        });
-      }
-    }
-  }
-  return findings;
-}
-function isShellLine(line) {
-  if (/^\s*(-\s*)?run:/.test(line)) return true;
-  return !/^\s*(-\s*)?([\w-]+\s*:|[{[])/.test(line);
-}
-function checkCommands(line) {
-  return [...line.matchAll(CHECK_COMMAND_ALL)].map((m) => m[1] ?? `${m[2]} script`);
-}
-function isSource(path) {
-  return path.endsWith(".py") || JS_FILE.test(path);
-}
-function kind(command) {
-  return CHECK_KIND[command] ?? command;
-}
-function isTestFile(path, text) {
-  return PYTHON_TEST_FILE.test(path) || isJsTestFile(path, text);
-}
-function isJsTestFile(path, text) {
-  return JS_TEST_NAME.test(path) || JS_TEST_DIR.test(path) && JS_TEST_CALL.test(text ?? "");
-}
-function multiset(files, kind2) {
-  const m = /* @__PURE__ */ new Map();
-  for (const f of files) {
-    for (const l of f.lines) if (l.kind === kind2) m.set(l.text.trim(), (m.get(l.text.trim()) ?? 0) + 1);
-  }
-  return m;
-}
-function take(m, text) {
-  const n = m.get(text) ?? 0;
-  if (n > 0) m.set(text, n - 1);
-  return n > 0;
-}
-function countAssertions(path, text) {
-  const assertion = path.endsWith(".py") ? PYTHON_ASSERTION : JS_ASSERTION;
-  return (text ?? "").split("\n").filter((l) => assertion.test(l)).length;
-}
-function threshold(text) {
-  const m = COVERAGE_THRESHOLD.exec(text ?? "");
-  return m ? Number(m[1]) : void 0;
-}
-
-// src/rules/js-builtins.ts
-var NODE_BUILTINS = /* @__PURE__ */ new Set([
-  "_http_agent",
-  "_http_client",
-  "_http_common",
-  "_http_incoming",
-  "_http_outgoing",
-  "_http_server",
-  "_stream_duplex",
-  "_stream_passthrough",
-  "_stream_readable",
-  "_stream_transform",
-  "_stream_wrap",
-  "_stream_writable",
-  "_tls_common",
-  "_tls_wrap",
-  "assert",
-  "async_hooks",
-  "buffer",
-  "child_process",
-  "cluster",
-  "console",
-  "constants",
-  "crypto",
-  "dgram",
-  "diagnostics_channel",
-  "dns",
-  "domain",
-  "events",
-  "fs",
-  "http",
-  "http2",
-  "https",
-  "inspector",
-  "module",
-  "net",
-  "os",
-  "path",
-  "perf_hooks",
-  "process",
-  "punycode",
-  "querystring",
-  "readline",
-  "repl",
-  "stream",
-  "string_decoder",
-  "sys",
-  "timers",
-  "tls",
-  "trace_events",
-  "tty",
-  "url",
-  "util",
-  "v8",
-  "vm",
-  "wasi",
-  "worker_threads",
-  "zlib"
-]);
-
-// src/rules/js-manifests.ts
-var DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
-function jsManifests(ctx) {
-  const packages = [];
-  const local = /* @__PURE__ */ new Set();
-  const aliases = [];
-  for (const path of ctx.listHead()) {
-    const base = path.split("/").pop();
-    if (base === "package.json") {
-      const json = parseJson(ctx.readHead(path));
-      if (!json) continue;
-      const names = /* @__PURE__ */ new Set();
-      for (const field of DEPENDENCY_FIELDS) {
-        const deps = json[field];
-        if (deps && typeof deps === "object") Object.keys(deps).forEach((n) => names.add(n));
-      }
-      if (typeof json.name === "string") {
-        names.add(json.name);
-        local.add(json.name);
-      }
-      packages.push({ path, dir: path.slice(0, -base.length), names });
-    } else if (/^[jt]sconfig[\w.-]*\.json$/.test(base)) {
-      aliases.push(...pathAliases(ctx.readHead(path) ?? ""));
-    }
-  }
-  return {
-    forFile: (file) => packages.filter((p) => file.startsWith(p.dir)).sort((a, b) => b.dir.length - a.dir.length),
-    local,
-    aliases
-  };
-}
-function parseJson(text) {
-  try {
-    const value = JSON.parse(text ?? "");
-    return value && typeof value === "object" ? value : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function pathAliases(text) {
-  const at = text.search(/"paths"\s*:\s*\{/);
-  if (at < 0) return [];
-  const body = text.slice(text.indexOf("{", at) + 1, text.indexOf("}", at));
-  return [...body.matchAll(/"([^"]+)"\s*:\s*\[/g)].map((m) => m[1].replace(/\*$/, ""));
-}
-
-// src/rules/python.ts
-var IMPORT = /^\s*import\s+(.+)$/;
-var FROM_IMPORT = /^\s*from\s+([\w.]+)\s+import\b/;
-function importedModules(line) {
-  const code2 = stripComment(line);
-  const from = FROM_IMPORT.exec(code2);
-  if (from) return from[1].startsWith(".") ? [] : [from[1].split(".")[0]];
-  const imp = IMPORT.exec(code2);
-  if (!imp) return [];
-  return imp[1].replace(/[()\\]/g, "").split(",").map((part) => part.trim().split(/\s+/)[0].split(".")[0]).filter((name) => /^[A-Za-z_]\w*$/.test(name));
-}
-function enclosingHeaders(lines, index) {
-  const headers = [];
-  let indent = indentation2(lines[index] ?? "");
-  for (let i = index - 1; i >= 0 && indent > 0; i--) {
-    const l = lines[i];
-    if (l.trim() === "" || l.trim().startsWith("#")) continue;
-    const ind = indentation2(l);
-    if (ind < indent) {
-      headers.push({ index: i, text: l.trim() });
-      indent = ind;
-    }
-  }
-  return headers;
-}
-var TYPE_CHECKING_IF = /^if\s+(?:[\w.]+\.)?TYPE_CHECKING\b/;
-function isGuardedImport(lines, index) {
-  return enclosingHeaders(lines, index).some(
-    (h) => TYPE_CHECKING_IF.test(h.text) || /^(try|except\b.*|finally)\s*:/.test(h.text) || isTryElse(lines, h)
-  );
-}
-function isTryElse(lines, header) {
-  if (!/^else\s*:/.test(header.text)) return false;
-  const indent = indentation2(lines[header.index]);
-  for (let i = header.index - 1; i >= 0; i--) {
-    const l = lines[i];
-    if (l.trim() === "" || indentation2(l) > indent) continue;
-    return /^except\b/.test(l.trim());
-  }
-  return false;
-}
-function optionalModules(lines) {
-  const names = /* @__PURE__ */ new Set();
-  lines.forEach((line, i) => {
-    if (isGuardedImport(lines, i)) importedModules(line).forEach((m) => names.add(m));
-  });
-  return names;
-}
-var ENV_READS2 = [
-  /\b(?:os\.)?getenv\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
-  /\b(?:os\.)?environ\.get\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
-  /\b(?:os\.)?environ\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\](?!\s*=[^=])/g
-];
-function envVarReads2(line) {
-  const code2 = stripComment(line);
-  const names = [];
-  for (const re of ENV_READS2) {
-    for (const m of code2.matchAll(re)) names.push(m[1]);
-  }
-  return names;
-}
-function normalizeDist(name) {
-  return name.toLowerCase().replace(/[-_.]+/g, "-");
-}
-function indentation2(line) {
-  return line.length - line.trimStart().length;
-}
-function stripComment(line) {
-  let quote;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (quote) {
-      if (c === "\\") i++;
-      else if (c === quote) quote = void 0;
-    } else if (c === '"' || c === "'") {
-      quote = c;
-    } else if (c === "#") {
-      return line.slice(0, i);
-    }
-  }
-  return line;
-}
+// src/index.ts
+import { readFileSync } from "node:fs";
 
 // node_modules/smol-toml/dist/error.js
 function getLineColFromPtr(string, ptr) {
@@ -1687,11 +763,1107 @@ function parse(toml, options = {}) {
 // node_modules/smol-toml/dist/stringify.js
 var HAS_WELLFORMED = !!"".isWellFormed;
 
+// src/config.ts
+var CONFIG_FILE = ".rsp.toml";
+var ConfigError = class extends Error {
+};
+function parseConfig(text, rules, path = CONFIG_FILE) {
+  let doc;
+  try {
+    doc = parse(text);
+  } catch (err) {
+    throw new ConfigError(`${path}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const fail = (msg) => {
+    throw new ConfigError(`${path}: ${msg}`);
+  };
+  checkKeys(doc, ["exclude", "rules"], "", fail);
+  const config = { path, exclude: strings(doc.exclude, "exclude", fail), rules: {} };
+  const ruleTables = doc.rules ?? {};
+  if (!isTable(ruleTables)) fail("`rules` must be a table");
+  for (const [id, value] of Object.entries(ruleTables)) {
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) fail(`unknown rule "${id}"; known rules: ${rules.map((r) => r.id).join(", ")}`);
+    if (!isTable(value)) fail(`rules."${id}" must be a table`);
+    const table = value;
+    checkKeys(table, ["enabled", "exclude", "allow"], `rules."${id}".`, fail);
+    if (table.enabled !== void 0 && typeof table.enabled !== "boolean") fail(`rules."${id}".enabled must be true or false`);
+    const allow = strings(table.allow, `rules."${id}".allow`, fail);
+    const unknown = rule.knownKeys ? allow.filter((k) => !rule.knownKeys.includes(k)) : [];
+    if (unknown.length > 0) {
+      fail(`rules."${id}".allow: unknown ${unknown.map((k) => `"${k}"`).join(", ")}; known: ${rule.knownKeys.join(", ")}`);
+    }
+    config.rules[id] = {
+      enabled: table.enabled ?? true,
+      exclude: strings(table.exclude, `rules."${id}".exclude`, fail),
+      allow
+    };
+  }
+  return config;
+}
+function checkKeys(table, known, prefix, fail) {
+  for (const key of Object.keys(table)) {
+    if (!known.includes(key)) fail(`unknown key "${prefix}${key}"; expected one of ${known.map((k) => prefix + k).join(", ")}`);
+  }
+}
+function strings(value, name, fail) {
+  if (value === void 0) return [];
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) fail(`${name} must be a list of strings`);
+  return [...new Set(value)].sort();
+}
+function isTable(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date);
+}
+
+// src/diff.ts
+var HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+function parseUnifiedDiff(text) {
+  const files = [];
+  let current;
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+  for (const raw of text.split("\n")) {
+    if (raw.startsWith("diff --git ")) {
+      const [oldPath, newPath] = splitGitHeader(raw.slice("diff --git ".length));
+      current = { path: newPath, oldPath, status: "modified", binary: false, lines: [] };
+      files.push(current);
+      inHunk = false;
+      continue;
+    }
+    if (!current) continue;
+    if (inHunk) {
+      if (raw.startsWith("+")) {
+        current.lines.push({ kind: "add", text: raw.slice(1), newLine: newLine++ });
+        continue;
+      }
+      if (raw.startsWith("-")) {
+        current.lines.push({ kind: "del", text: raw.slice(1), oldLine: oldLine++ });
+        continue;
+      }
+      if (raw.startsWith(" ")) {
+        oldLine++;
+        newLine++;
+        continue;
+      }
+      if (raw.startsWith("\\")) continue;
+      inHunk = false;
+    }
+    const hunk = HUNK_HEADER.exec(raw);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      inHunk = true;
+    } else if (raw.startsWith("new file mode")) {
+      current.status = "added";
+    } else if (raw.startsWith("deleted file mode")) {
+      current.status = "deleted";
+    } else if (raw.startsWith("rename from ")) {
+      current.status = "renamed";
+      current.oldPath = unquote(raw.slice("rename from ".length));
+    } else if (raw.startsWith("rename to ")) {
+      current.status = "renamed";
+      current.path = unquote(raw.slice("rename to ".length));
+    } else if (raw.startsWith("Binary files ")) {
+      current.binary = true;
+    } else if (raw.startsWith("--- ")) {
+      const p = raw.slice(4);
+      if (p !== "/dev/null") current.oldPath = stripPrefix(unquote(p), "a/");
+    } else if (raw.startsWith("+++ ")) {
+      const p = raw.slice(4);
+      if (p !== "/dev/null") current.path = stripPrefix(unquote(p), "b/");
+    }
+  }
+  for (const f of files) {
+    if (f.status === "deleted") f.path = f.oldPath;
+  }
+  return files;
+}
+function splitGitHeader(rest) {
+  if (rest.startsWith('"')) {
+    const end = closingQuote(rest);
+    const oldPath = unquote(rest.slice(0, end + 1));
+    const newPath = unquote(rest.slice(end + 2));
+    return [stripPrefix(oldPath, "a/"), stripPrefix(newPath, "b/")];
+  }
+  const half = (rest.length - 1) / 2;
+  if (Number.isInteger(half) && rest[half] === " ") {
+    const oldPath = rest.slice(0, half);
+    const newPath = rest.slice(half + 1);
+    if (oldPath.slice(2) === newPath.slice(2)) {
+      return [stripPrefix(oldPath, "a/"), stripPrefix(newPath, "b/")];
+    }
+  }
+  const idx = rest.indexOf(" b/");
+  return [stripPrefix(rest.slice(0, idx), "a/"), stripPrefix(rest.slice(idx + 1), "b/")];
+}
+function closingQuote(s) {
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] === "\\") i++;
+    else if (s[i] === '"') return i;
+  }
+  return s.length - 1;
+}
+var ESCAPES = { n: "\n", t: "	", '"': '"', "\\": "\\" };
+function unquote(p) {
+  if (!p.startsWith('"') || !p.endsWith('"')) return p;
+  const body = p.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c !== "\\") {
+      bytes.push(...Buffer.from(c, "utf8"));
+      continue;
+    }
+    const next = body[++i];
+    if (/[0-7]/.test(next)) {
+      bytes.push(parseInt(body.slice(i, i + 3), 8));
+      i += 2;
+    } else {
+      bytes.push(...Buffer.from(ESCAPES[next] ?? next, "utf8"));
+    }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+function stripPrefix(p, prefix) {
+  return p.startsWith(prefix) ? p.slice(prefix.length) : p;
+}
+
+// src/git.ts
+import { execFileSync } from "node:child_process";
+var STABLE_CONFIG = [
+  "-c",
+  "core.quotePath=false",
+  "-c",
+  "diff.noprefix=false",
+  "-c",
+  "diff.mnemonicPrefix=false",
+  "-c",
+  "diff.renames=true"
+];
+function git(repoDir, args) {
+  return execFileSync("git", [...STABLE_CONFIG, ...args], {
+    cwd: repoDir,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+}
+function resolveCommit(repoDir, ref) {
+  return git(repoDir, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]).trim();
+}
+function mergeBase(repoDir, a, b) {
+  return git(repoDir, ["merge-base", a, b]).trim();
+}
+function diff(repoDir, base, head) {
+  return git(repoDir, [
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--find-renames",
+    "--unified=0",
+    base,
+    head
+  ]);
+}
+function readAt(repoDir, commit, path) {
+  try {
+    return git(repoDir, ["show", `${commit}:${path}`]);
+  } catch {
+    return void 0;
+  }
+}
+function listFiles(repoDir, commit) {
+  return git(repoDir, ["ls-tree", "-r", "-z", "--name-only", commit]).split("\0").filter((p) => p.length > 0).sort();
+}
+
+// src/glob.ts
+function globToRegExp(glob) {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*" && glob[i + 1] === "*") {
+      if (glob[i + 2] === "/") {
+        re += "(?:.*/)?";
+        i += 2;
+      } else {
+        re += ".*";
+        i += 1;
+      }
+    } else if (c === "*") {
+      re += "[^/]*";
+    } else if (c === "?") {
+      re += "[^/]";
+    } else {
+      re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+// src/context.ts
+function buildContext(repoDir, baseRef, headRef, exclude = []) {
+  const head = resolveCommit(repoDir, headRef);
+  const base = mergeBase(repoDir, resolveCommit(repoDir, baseRef), head);
+  const excluded = exclude.map(globToRegExp);
+  const files = parseUnifiedDiff(diff(repoDir, base, head)).filter(
+    (f) => !excluded.some((re) => re.test(f.path) || re.test(f.oldPath))
+  );
+  const cache = /* @__PURE__ */ new Map();
+  const read = (commit, path) => {
+    const key = `${commit}:${path}`;
+    if (!cache.has(key)) cache.set(key, readAt(repoDir, commit, path));
+    return cache.get(key);
+  };
+  let headFiles;
+  return {
+    repoDir,
+    base,
+    head,
+    files,
+    readBase: (path) => read(base, path),
+    readHead: (path) => read(head, path),
+    listHead: () => headFiles ??= listFiles(repoDir, head)
+  };
+}
+
+// src/engine.ts
+import { createHash } from "node:crypto";
+
+// src/version.ts
+var VERSION = "0.3.0";
+
+// src/engine.ts
+function runRules(ctx, rules, options = [], config) {
+  const opts = options.map((o) => ` ${o}`).join("");
+  const findings = [];
+  for (const rule of rules) {
+    const rc = config?.rules[rule.id];
+    const excluded = (rc?.exclude ?? []).map(globToRegExp);
+    for (const raw of rule.run(ctx)) {
+      if (rc?.allow.includes(raw.key)) continue;
+      if (raw.locations.some((l) => excluded.some((re) => re.test(l.path)))) continue;
+      findings.push({
+        ruleId: rule.id,
+        ruleVersion: rule.version,
+        key: raw.key,
+        message: raw.message,
+        locations: raw.locations,
+        evidence: raw.evidence,
+        fingerprint: "",
+        reproduce: `rsp check --base ${ctx.base} --head ${ctx.head}${opts} --rule ${rule.id}`
+      });
+    }
+  }
+  findings.sort(compareFindings);
+  assignFingerprints(findings);
+  return {
+    tool: { name: "rsp", version: VERSION },
+    base: ctx.base,
+    head: ctx.head,
+    options,
+    config: config?.path ?? null,
+    rules: rules.map((r) => ({ id: r.id, version: r.version })).sort((a, b) => cmp(a.id, b.id)),
+    findings
+  };
+}
+function compareFindings(a, b) {
+  const la = a.locations[0];
+  const lb = b.locations[0];
+  return cmp(la?.path ?? "", lb?.path ?? "") || (la?.line ?? 0) - (lb?.line ?? 0) || cmp(a.ruleId, b.ruleId) || cmp(a.message, b.message);
+}
+function assignFingerprints(findings) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const f of findings) {
+    const key = [f.ruleId, f.locations[0]?.path ?? "", f.evidence.trim()].join("\0");
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+    const hash = createHash("sha256").update(`${key}\0${n}`).digest("hex");
+    f.fingerprint = hash.slice(0, 16);
+  }
+}
+function cmp(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// src/junit.ts
+var TESTCASE = /<testcase\b((?:[^>"']|"[^"]*"|'[^']*')*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
+var ATTR = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
+function parseJUnit(xml) {
+  const results = /* @__PURE__ */ new Map();
+  const text = xml.replace(/<!--[\s\S]*?-->/g, "");
+  for (const m of text.matchAll(TESTCASE)) {
+    const attrs = /* @__PURE__ */ new Map();
+    for (const a of m[1].matchAll(ATTR)) attrs.set(a[1], unescape(a[3] ?? a[4] ?? ""));
+    const name = attrs.get("name");
+    if (!name) continue;
+    const body = (m[3] ?? "").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
+    const status = /<(failure|error)\b/.test(body) ? "failed" : /<skipped\b/.test(body) ? "skipped" : "passed";
+    const id = [attrs.get("classname") || attrs.get("file"), name].filter(Boolean).join("::");
+    results.set(id, combine(results.get(id), status));
+  }
+  return results;
+}
+function mergeRuns(files) {
+  const results = /* @__PURE__ */ new Map();
+  for (const f of files) {
+    for (const [id, status] of parseJUnit(f.xml)) results.set(id, combine(results.get(id), status));
+  }
+  return { files: files.map((f) => f.path), results };
+}
+function combine(a, b) {
+  if (a === void 0) return b;
+  if (a === "passed" || b === "passed") return "passed";
+  if (a === "failed" || b === "failed") return "failed";
+  return "skipped";
+}
+function unescape(s) {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16))).replace(/&amp;/g, "&");
+}
+
+// src/rules/js.ts
+var JS_FILE = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts|vue|svelte)$/;
+var STATIC_IMPORTS = [
+  /^\s*import\s+(?:type\s+)?[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/,
+  /^\s*import\s*['"]([^'"]+)['"]/,
+  /^\s*export\s+(?:type\s+)?[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/,
+  // Closing line of a multi-line import or export: `} from "pkg";`
+  /^\s*\}\s*from\s*['"]([^'"]+)['"]/
+];
+var REQUIRE = /(?<![\w.$])require\(\s*['"]([^'"]+)['"]\s*\)/g;
+function importedSpecifiers(line) {
+  if (isCommentLine(line)) return [];
+  const specs = [];
+  for (const re of STATIC_IMPORTS) {
+    const m = re.exec(line);
+    if (m) specs.push(m[1]);
+  }
+  const code2 = blankStrings(line);
+  for (const m of line.matchAll(REQUIRE)) {
+    if (code2.startsWith("require(", m.index)) specs.push(m[1]);
+  }
+  return specs;
+}
+function packageName(spec) {
+  if (/^[./]/.test(spec) || spec.includes(":") || /^[#~$]/.test(spec) || spec.startsWith("@/")) return void 0;
+  const parts = spec.split("/");
+  const name = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+  return /^(@[\w.-]+\/)?[\w.-]+$/.test(name) ? name : void 0;
+}
+function isInTryBlock(lines, index) {
+  let indent = indentation(lines[index] ?? "");
+  for (let i = index - 1; i >= 0 && indent > 0; i--) {
+    const l = lines[i];
+    if (l.trim() === "" || isCommentLine(l)) continue;
+    const ind = indentation(l);
+    if (ind < indent) {
+      if (/^(\}\s*)?(try|catch\b[^{]*)\s*\{\s*$/.test(l.trim())) return true;
+      indent = ind;
+    }
+  }
+  return false;
+}
+var ENV_READS = [
+  /\b(?:process\.env|import\.meta\.env|Bun\.env)\??\.([A-Za-z_][A-Za-z0-9_]*)\b(?!\s*(?:=[^=]|\?\?=|\|\|=|&&=))/g,
+  /\b(?:process\.env|import\.meta\.env|Bun\.env)\??\.?\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\](?!\s*(?:=[^=]|\?\?=|\|\|=|&&=))/g,
+  /\bDeno\.env\.get\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]/g
+];
+var ENV_DESTRUCTURE = /\{([^{}]*)\}\s*=\s*(?:process\.env|import\.meta\.env|Bun\.env)\b/;
+var VITE_BUILTINS = /* @__PURE__ */ new Set(["MODE", "BASE_URL", "PROD", "DEV", "SSR"]);
+function envVarReads(line) {
+  if (isCommentLine(line)) return [];
+  const code2 = line.replace(/\/\/.*$/, "");
+  const blank = blankStrings(code2);
+  const names = [];
+  for (const re of ENV_READS) {
+    for (const m of code2.matchAll(re)) {
+      if (blank.startsWith(m[0].slice(0, 4), m.index)) names.push(m[1]);
+    }
+  }
+  const d = ENV_DESTRUCTURE.exec(blank);
+  if (d) {
+    for (const part of d[1].split(",")) {
+      const name = /^\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(part)?.[1];
+      if (name) names.push(name);
+    }
+  }
+  return code2.includes("import.meta.env") ? names.filter((n) => !VITE_BUILTINS.has(n)) : names;
+}
+function nonCodeLines(text) {
+  const result = /* @__PURE__ */ new Set();
+  const stack = [];
+  let state = "code";
+  let inClass = false;
+  let prev;
+  let line = 1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const top = stack[stack.length - 1];
+    if (c === "\n") {
+      line++;
+      if (state === "line-comment" || state === "'" || state === '"' || state === "regex") state = "code";
+      if (state === "block-comment" || state === "code" && top === "template") result.add(line);
+      continue;
+    }
+    if (state === "line-comment") continue;
+    if (state === "block-comment") {
+      if (c === "*" && text[i + 1] === "/") {
+        state = "code";
+        i++;
+      }
+      continue;
+    }
+    if (state === "'" || state === '"') {
+      if (c === "\\" && text[i + 1] !== "\n") i++;
+      else if (c === state) {
+        state = "code";
+        prev = "a";
+      }
+      continue;
+    }
+    if (state === "regex") {
+      if (c === "\\" && text[i + 1] !== "\n") i++;
+      else if (c === "[") inClass = true;
+      else if (c === "]") inClass = false;
+      else if (c === "/" && !inClass) {
+        state = "code";
+        prev = "a";
+      }
+      continue;
+    }
+    if (top === "template") {
+      if (c === "\\" && text[i + 1] !== "\n") i++;
+      else if (c === "`") {
+        stack.pop();
+        prev = "a";
+      } else if (c === "$" && text[i + 1] === "{") {
+        stack.push(0);
+        prev = "{";
+        i++;
+      }
+      continue;
+    }
+    if (/\s/.test(c)) continue;
+    if (c === "/" && text[i + 1] === "/") state = "line-comment";
+    else if (c === "/" && text[i + 1] === "*") {
+      state = "block-comment";
+      i++;
+    } else if (c === "/" && startsRegex(text, i, prev)) {
+      state = "regex";
+      inClass = false;
+    } else if (c === "'" || c === '"') state = c;
+    else if (c === "`") stack.push("template");
+    else if (typeof top === "number" && c === "{") stack[stack.length - 1] = top + 1;
+    else if (typeof top === "number" && c === "}") {
+      if (top === 0) stack.pop();
+      else stack[stack.length - 1] = top - 1;
+    }
+    if (state === "code" && c !== "`") prev = c;
+  }
+  return result;
+}
+var BEFORE_REGEX_WORDS = /* @__PURE__ */ new Set([
+  "return",
+  "typeof",
+  "case",
+  "do",
+  "else",
+  "in",
+  "of",
+  "void",
+  "yield",
+  "await",
+  "delete",
+  "instanceof",
+  "new"
+]);
+function startsRegex(text, index, prev) {
+  if (prev === void 0 || "(,=:[!&|?{};+-*%<>~^".includes(prev)) return true;
+  if (!/[\w$]/.test(prev)) return false;
+  const word = /([\w$]+)\s*$/.exec(text.slice(Math.max(0, index - 20), index))?.[1];
+  return word !== void 0 && BEFORE_REGEX_WORDS.has(word);
+}
+function blankStrings(line) {
+  let out = "";
+  let quote;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === "\\") {
+        out += "  ";
+        i++;
+      } else if (c === quote) {
+        out += c;
+        quote = void 0;
+      } else if (quote === "`" && c === "$" && line[i + 1] === "{") {
+        const end = closingBrace(line, i + 2);
+        out += line.slice(i, end + 1);
+        i = end;
+      } else {
+        out += " ";
+      }
+    } else if (c === "/" && (line[i + 1] === "/" || line[i + 1] === "*")) {
+      return out + line.slice(i);
+    } else {
+      if (c === "'" || c === '"' || c === "`") quote = c;
+      out += c;
+    }
+  }
+  return out;
+}
+function closingBrace(line, from) {
+  let depth = 0;
+  for (let i = from; i < line.length; i++) {
+    if (line[i] === "{") depth++;
+    else if (line[i] === "}" && depth-- === 0) return i;
+  }
+  return line.length - 1;
+}
+function isCommentLine(line) {
+  return /^\s*(\/\/|\/\*|\*)/.test(line);
+}
+function indentation(line) {
+  return line.length - line.trimStart().length;
+}
+
+// src/rules/python.ts
+var IMPORT = /^\s*import\s+(.+)$/;
+var FROM_IMPORT = /^\s*from\s+([\w.]+)\s+import\b/;
+function importedModules(line) {
+  const code2 = stripComment(line);
+  const from = FROM_IMPORT.exec(code2);
+  if (from) return from[1].startsWith(".") ? [] : [from[1].split(".")[0]];
+  const imp = IMPORT.exec(code2);
+  if (!imp) return [];
+  return imp[1].replace(/[()\\]/g, "").split(",").map((part) => part.trim().split(/\s+/)[0].split(".")[0]).filter((name) => /^[A-Za-z_]\w*$/.test(name));
+}
+function enclosingHeaders(lines, index) {
+  const headers = [];
+  let indent = indentation2(lines[index] ?? "");
+  for (let i = index - 1; i >= 0 && indent > 0; i--) {
+    const l = lines[i];
+    if (l.trim() === "" || l.trim().startsWith("#")) continue;
+    const ind = indentation2(l);
+    if (ind < indent) {
+      headers.push({ index: i, text: l.trim() });
+      indent = ind;
+    }
+  }
+  return headers;
+}
+var TYPE_CHECKING_IF = /^if\s+(?:[\w.]+\.)?TYPE_CHECKING\b/;
+function isGuardedImport(lines, index) {
+  return enclosingHeaders(lines, index).some(
+    (h) => TYPE_CHECKING_IF.test(h.text) || /^(try|except\b.*|finally)\s*:/.test(h.text) || isTryElse(lines, h)
+  );
+}
+function isTryElse(lines, header) {
+  if (!/^else\s*:/.test(header.text)) return false;
+  const indent = indentation2(lines[header.index]);
+  for (let i = header.index - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (l.trim() === "" || indentation2(l) > indent) continue;
+    return /^except\b/.test(l.trim());
+  }
+  return false;
+}
+function optionalModules(lines) {
+  const names = /* @__PURE__ */ new Set();
+  lines.forEach((line, i) => {
+    if (isGuardedImport(lines, i)) importedModules(line).forEach((m) => names.add(m));
+  });
+  return names;
+}
+var ENV_READS2 = [
+  /\b(?:os\.)?getenv\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
+  /\b(?:os\.)?environ\.get\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
+  /\b(?:os\.)?environ\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\](?!\s*=[^=])/g
+];
+function envVarReads2(line) {
+  const code2 = stripComment(line);
+  const names = [];
+  for (const re of ENV_READS2) {
+    for (const m of code2.matchAll(re)) names.push(m[1]);
+  }
+  return names;
+}
+function normalizeDist(name) {
+  return name.toLowerCase().replace(/[-_.]+/g, "-");
+}
+function indentation2(line) {
+  return line.length - line.trimStart().length;
+}
+function stripComment(line) {
+  let quote;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = void 0;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "#") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+function stringLines(text) {
+  const out = /* @__PURE__ */ new Set();
+  let line = 1;
+  let quote;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\n") {
+      line++;
+      if (quote && quote.length === 1) quote = void 0;
+      if (quote) out.add(line);
+      continue;
+    }
+    if (quote) {
+      if (c === "\\" && text[i + 1] !== "\n") i++;
+      else if (text.startsWith(quote, i)) {
+        i += quote.length - 1;
+        quote = void 0;
+      }
+    } else if (c === "#") {
+      while (i + 1 < text.length && text[i + 1] !== "\n") i++;
+    } else if (c === '"' || c === "'") {
+      quote = text.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
+      i += quote.length - 1;
+    }
+  }
+  return out;
+}
+function blankStrings2(line) {
+  let out = "";
+  let quote;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === "\\") {
+        out += "  ";
+        i++;
+      } else if (line.startsWith(quote, i)) {
+        out += quote;
+        i += quote.length - 1;
+        quote = void 0;
+      } else out += " ";
+    } else if (c === "#") {
+      return out + line.slice(i);
+    } else if (c === '"' || c === "'") {
+      quote = line.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
+      out += quote;
+      i += quote.length - 1;
+    } else out += c;
+  }
+  return out;
+}
+
+// src/rules/checks-disabled.ts
+var PYTHON_PATTERNS = [
+  { id: "pytest-skip", label: "pytest skip marker", regex: /@pytest\.mark\.skip(if)?\b/ },
+  { id: "pytest-xfail", label: "pytest xfail marker", regex: /@pytest\.mark\.xfail\b/ },
+  { id: "pytest-skip-call", label: "pytest.skip() call", regex: /\bpytest\.skip\s*\(/ },
+  { id: "unittest-skip", label: "unittest skip decorator", regex: /@unittest\.(skip|skipIf|skipUnless|expectedFailure)\b/ },
+  { id: "noqa", label: "noqa comment", regex: /#\s*noqa\b/i },
+  { id: "type-ignore", label: "type: ignore comment", regex: /#\s*type:\s*ignore\b/ },
+  { id: "pylint-disable", label: "pylint disable comment", regex: /#\s*pylint:\s*disable\b/ },
+  { id: "coverage-exclusion", label: "coverage exclusion", regex: /#\s*pragma:\s*no\s*cover\b/ },
+  { id: "nosec", label: "bandit nosec comment", regex: /#\s*nosec\b/ }
+];
+var JS_PATTERNS = [
+  { id: "eslint-disable", label: "eslint-disable comment", regex: /(\/\/|\/\*)\s*(eslint|oxlint)-disable\b/ },
+  { id: "ts-ignore", label: "@ts-ignore comment", regex: /(\/\/|\/\*)\s*@ts-ignore\b/ },
+  { id: "ts-nocheck", label: "@ts-nocheck comment", regex: /(\/\/|\/\*)\s*@ts-nocheck\b/ },
+  { id: "ts-expect-error", label: "@ts-expect-error comment", regex: /(\/\/|\/\*)\s*@ts-expect-error\b/ },
+  { id: "biome-ignore", label: "biome-ignore comment", regex: /(\/\/|\/\*)\s*biome-ignore\b/ },
+  { id: "coverage-exclusion", label: "coverage exclusion", regex: /(\/\/|\/\*)\s*(istanbul|c8|v8)\s+ignore\b/ }
+];
+var JS_TEST_PATTERNS = [
+  { id: "test-skip", label: "skipped test (`.skip`)", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.(skip|skipIf|fixme)\b/ },
+  { id: "test-only", label: "focused test (`.only`), which skips the others", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.only\b/ },
+  { id: "test-skip", label: "skipped test (`x` prefix)", regex: /(^|[^\w.$])x(describe|it|test|context)\s*\(/ }
+];
+var WORKFLOW_PATTERNS = [
+  { id: "continue-on-error", label: "continue-on-error: true", regex: /^\s*continue-on-error:\s*true\b/ },
+  { id: "or-true", label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
+  { id: "or-exit-0", label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ },
+  { id: "if-false", label: "step or job disabled with `if: false`", regex: /^\s*-?\s*if:\s*(false|\$\{\{\s*false\s*\}\})\s*$/ }
+];
+var TEST_CONFIG_PATTERNS = [
+  { id: "pytest-exclude-option", label: "pytest option that excludes tests", regex: /--deselect\b|--ignore(-glob)?\b|(^|\s)-p\s+no:/ }
+];
+var PACKAGE_JSON_PATTERNS = [
+  { id: "or-true", label: "`|| true` after a command", regex: /\|\|\s*true\b/ },
+  { id: "or-exit-0", label: "`|| exit 0` after a command", regex: /\|\|\s*exit\s+0\b/ }
+];
+var TSCONFIG_PATTERNS = [
+  {
+    id: "ts-strict-off",
+    label: "TypeScript check turned off",
+    regex: /"(strict|noImplicitAny|strictNullChecks|strictFunctionTypes|strictBindCallApply|noImplicitThis|alwaysStrict|noImplicitReturns|noUnusedLocals|noUnusedParameters|noUncheckedIndexedAccess|noFallthroughCasesInSwitch)"\s*:\s*false\b/
+  }
+];
+var ESLINT_CONFIG_PATTERNS = [
+  { id: "eslint-rule-off", label: "ESLint rule turned off", regex: /['"]?[\w@/-]+['"]?\s*:\s*\[?\s*(['"]off['"]|0\s*[,\]}]|0\s*$)/ }
+];
+var CHECK_KIND = {
+  pytest: "test",
+  unittest: "test",
+  tox: "test",
+  nox: "test",
+  jest: "test",
+  vitest: "test",
+  mocha: "test",
+  ava: "test",
+  playwright: "test",
+  cypress: "test",
+  "test script": "test",
+  "node --test": "test",
+  "deno test": "test",
+  "bun test": "test",
+  ruff: "lint",
+  flake8: "lint",
+  pylint: "lint",
+  eslint: "lint",
+  oxlint: "lint",
+  biome: "lint",
+  "lint script": "lint",
+  mypy: "types",
+  pyright: "types",
+  tsc: "types",
+  "typecheck script": "types",
+  "type-check script": "types",
+  black: "format",
+  isort: "format",
+  prettier: "format"
+};
+var CHECK_COMMAND = new RegExp(
+  "\\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome)\\b|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b|\\b(node)(?:\\s+-[^\\s&|;]+(?:\\s+[^-\\s&|;][^\\s&|;]*)?)*?\\s+--test\\b|\\b(deno|bun)\\s+test\\b"
+);
+var CHECK_COMMAND_ALL = new RegExp(CHECK_COMMAND.source, "g");
+var COVERAGE_THRESHOLD = /(?:fail_under|fail-under|--cov-fail-under)\s*[=:]?\s*["']?(\d+(?:\.\d+)?)/;
+var PYTHON_ASSERTION = /^\s*assert\b|\bself\.assert[A-Z]\w*\(|\bpytest\.raises\(/;
+var JS_ASSERTION = /\bexpect\(|(^|[^\w.$])assert(\.\w+)?\(|\bt\.(is|not|deepEqual|true|false|throws|equal|ok)\(/;
+var PYTHON_TEST_FILE = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/;
+var JS_TEST_NAME = /\.(test|spec|e2e|test-d|tst)\.[cm]?[jt]sx?$/;
+var JS_TEST_DIR = /(^|\/)(__tests__|tests?|e2e|cypress|spec)\/.*\.[cm]?[jt]sx?$/;
+var JS_TEST_CALL = /(^|[^\w.$])(describe|it|test)\s*\(/;
+var WORKFLOW_FILE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
+var TEST_CONFIG_FILE = /(^|\/)(pyproject\.toml|setup\.cfg|pytest\.ini|tox\.ini|\.coveragerc)$/;
+var TSCONFIG_FILE = /(^|\/)[jt]sconfig[\w.-]*\.json$/;
+var ESLINT_CONFIG_FILE = /(^|\/)(eslint\.config\.[cm]?[jt]s|\.eslintrc(\.(json|js|cjs|yml|yaml))?)$/;
+var KNOWN_KEYS = [
+  .../* @__PURE__ */ new Set([
+    ...[PYTHON_PATTERNS, JS_PATTERNS, JS_TEST_PATTERNS, WORKFLOW_PATTERNS, TEST_CONFIG_PATTERNS].flat().map((p) => p.id),
+    ...[PACKAGE_JSON_PATTERNS, TSCONFIG_PATTERNS, ESLINT_CONFIG_PATTERNS].flat().map((p) => p.id),
+    "test-file-deleted",
+    "fewer-assertions",
+    "ci-check-removed",
+    "coverage-threshold-lowered",
+    "script-check-removed"
+  ])
+].sort();
+var checksDisabled = {
+  id: "checks/disabled",
+  version: "0.3.0",
+  keys: "a pattern id, e.g. `type-ignore` or `eslint-disable`",
+  knownKeys: KNOWN_KEYS,
+  description: "Checks that were removed or switched off: deleted test files, fewer assertions, skip markers, lint and type suppressions, CI steps or package.json scripts removed or allowed to fail, lower coverage thresholds, TypeScript and ESLint checks turned off.",
+  run(ctx) {
+    const findings = [];
+    const removedSource = multiset(ctx.files.filter((f) => isSource(f.path) || isSource(f.oldPath)), "del");
+    for (const file of ctx.files) {
+      if (file.binary) continue;
+      if (file.path.endsWith(".py")) findings.push(...pythonFile(ctx, file, removedSource));
+      if (JS_FILE.test(file.path)) findings.push(...jsFile(ctx, file, removedSource));
+      if (WORKFLOW_FILE.test(file.path)) findings.push(...workflowFile(file));
+      if (TEST_CONFIG_FILE.test(file.path)) findings.push(...testConfigFile(ctx, file));
+      if (file.path.split("/").pop() === "package.json") findings.push(...packageJsonFile(ctx, file));
+      if (TSCONFIG_FILE.test(file.path)) findings.push(...matchAdded(file, TSCONFIG_PATTERNS));
+      if (ESLINT_CONFIG_FILE.test(file.path)) findings.push(...matchAdded(file, ESLINT_CONFIG_PATTERNS));
+    }
+    findings.push(...fewerAssertions(ctx));
+    return findings;
+  }
+};
+function pythonFile(ctx, file, removed) {
+  if (file.status === "deleted") {
+    return PYTHON_TEST_FILE.test(file.path) ? [{ key: "test-file-deleted", message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }] : [];
+  }
+  const nonCode = stringLines(ctx.readHead(file.path) ?? "");
+  return matchAdded(file, PYTHON_PATTERNS, removed, (l) => nonCode.has(l.newLine) ? "" : blankStrings2(l.text));
+}
+function jsFile(ctx, file, removed) {
+  if (file.status === "deleted") {
+    return isJsTestFile(file.path, ctx.readBase(file.path)) ? [{ key: "test-file-deleted", message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }] : [];
+  }
+  const inTests = JS_TEST_NAME.test(file.path) || JS_TEST_DIR.test(file.path);
+  const patterns = inTests ? [...JS_PATTERNS.filter((p) => p.id !== "ts-expect-error"), ...JS_TEST_PATTERNS] : JS_PATTERNS;
+  const nonCode = nonCodeLines(ctx.readHead(file.path) ?? "");
+  return matchAdded(file, patterns, removed, (l) => nonCode.has(l.newLine) ? "" : blankStrings(l.text));
+}
+function packageJsonFile(ctx, file) {
+  const findings = matchAdded(file, PACKAGE_JSON_PATTERNS);
+  if (file.status === "deleted") return findings;
+  const before = scripts(ctx.readBase(file.oldPath));
+  const after = scripts(ctx.readHead(file.path));
+  if (!before || !after) return findings;
+  const stillRun = new Set(Object.values(after).flatMap(checkCommands).map(kind));
+  const lines = (ctx.readHead(file.path) ?? "").split("\n");
+  for (const [name, command] of Object.entries(before)) {
+    const lost = checkCommands(command).filter((c) => !stillRun.has(kind(c)));
+    if (lost.length === 0) continue;
+    const now = after[name];
+    const index = lines.findIndex((l) => l.trimStart().startsWith(`${JSON.stringify(name)}:`));
+    findings.push(
+      now === void 0 ? {
+        key: "script-check-removed",
+        message: `Removed package.json script \`${name}\`, which ran ${lost.map((c) => `\`${c}\``).join(", ")}`,
+        locations: [{ path: file.path }],
+        evidence: `"${name}": ${JSON.stringify(command)}`
+      } : {
+        key: "script-check-removed",
+        message: `package.json script \`${name}\` no longer runs ${lost.map((c) => `\`${c}\``).join(", ")}`,
+        locations: [{ path: file.path, line: index >= 0 ? index + 1 : void 0 }],
+        evidence: index >= 0 ? lines[index].trim() : `"${name}": ${JSON.stringify(now)}`
+      }
+    );
+  }
+  return findings;
+}
+function scripts(text) {
+  try {
+    const json = JSON.parse(text ?? "");
+    return Object.fromEntries(Object.entries(json.scripts ?? {}).filter((e) => typeof e[1] === "string"));
+  } catch {
+    return void 0;
+  }
+}
+function fewerAssertions(ctx) {
+  const tests = ctx.files.filter(
+    (f) => !f.binary && (isTestFile(f.path, ctx.readHead(f.path)) || isTestFile(f.oldPath, ctx.readBase(f.oldPath)))
+  );
+  const counts = tests.map((f) => ({
+    file: f,
+    before: f.status === "added" ? 0 : countAssertions(f.oldPath, ctx.readBase(f.oldPath)),
+    after: f.status === "deleted" ? 0 : countAssertions(f.path, ctx.readHead(f.path))
+  }));
+  const total = (k) => counts.reduce((n, c) => n + c[k], 0);
+  if (total("after") >= total("before")) return [];
+  return counts.filter((c) => c.file.status !== "added" && c.file.status !== "deleted" && c.after < c.before).map((c) => ({
+    key: "fewer-assertions",
+    message: `Assertions in test file went from ${c.before} to ${c.after}`,
+    locations: [{ path: c.file.path }],
+    evidence: `assertions: ${c.before} -> ${c.after}`
+  }));
+}
+function workflowFile(file) {
+  const findings = matchAdded(file, WORKFLOW_PATTERNS);
+  const addedKinds = new Set(
+    file.lines.filter((l) => l.kind === "add").flatMap((l) => checkCommands(l.text).map(kind))
+  );
+  for (const l of file.lines) {
+    if (l.kind !== "del") continue;
+    const command = isShellLine(l.text) ? checkCommands(l.text)[0] : void 0;
+    if (!command || addedKinds.has(kind(command))) continue;
+    const what = file.status === "deleted" ? "Workflow running a check deleted" : "Removed CI line running a check";
+    findings.push({
+      // Removed lines exist only in base, so the line number is given as a base line.
+      key: "ci-check-removed",
+      message: `${what} (base line ${l.oldLine})`,
+      locations: [{ path: file.oldPath }],
+      evidence: l.text.trim()
+    });
+  }
+  return findings;
+}
+function testConfigFile(ctx, file) {
+  const findings = matchAdded(file, TEST_CONFIG_PATTERNS);
+  const before = threshold(ctx.readBase(file.oldPath));
+  const after = threshold(ctx.readHead(file.path));
+  if (before !== void 0 && (after === void 0 || after < before)) {
+    const line = file.lines.find((l) => l.kind === "add" && COVERAGE_THRESHOLD.test(l.text));
+    findings.push({
+      key: "coverage-threshold-lowered",
+      message: `Coverage threshold went from ${before} to ${after ?? "none"}`,
+      locations: [{ path: file.path, line: line?.newLine }],
+      evidence: line?.text.trim() ?? `coverage threshold: ${before} -> none`
+    });
+  }
+  return findings;
+}
+function matchAdded(file, patterns, removed = multiset([file], "del"), code2 = (l) => l.text) {
+  const findings = [];
+  for (const l of file.lines) {
+    if (l.kind !== "add" || take(removed, l.text.trim())) continue;
+    for (const p of patterns) {
+      if (p.regex.test(code2(l))) {
+        findings.push({
+          key: p.id,
+          message: `Added ${p.label}`,
+          locations: [{ path: file.path, line: l.newLine }],
+          evidence: l.text.trim()
+        });
+      }
+    }
+  }
+  return findings;
+}
+function isShellLine(line) {
+  if (/^\s*(-\s*)?run:/.test(line)) return true;
+  return !/^\s*(-\s*)?([\w-]+\s*:|[{[])/.test(line);
+}
+function checkCommands(line) {
+  return [...line.matchAll(CHECK_COMMAND_ALL)].map((m) => m[1] ?? (m[2] ? `${m[2]} script` : m[3] ? "node --test" : `${m[4]} test`));
+}
+function isSource(path) {
+  return path.endsWith(".py") || JS_FILE.test(path);
+}
+function kind(command) {
+  return CHECK_KIND[command] ?? command;
+}
+function isTestFile(path, text) {
+  return PYTHON_TEST_FILE.test(path) || isJsTestFile(path, text);
+}
+function isJsTestFile(path, text) {
+  return JS_TEST_NAME.test(path) || JS_TEST_DIR.test(path) && JS_TEST_CALL.test(text ?? "");
+}
+function multiset(files, kind2) {
+  const m = /* @__PURE__ */ new Map();
+  for (const f of files) {
+    for (const l of f.lines) if (l.kind === kind2) m.set(l.text.trim(), (m.get(l.text.trim()) ?? 0) + 1);
+  }
+  return m;
+}
+function take(m, text) {
+  const n = m.get(text) ?? 0;
+  if (n > 0) m.set(text, n - 1);
+  return n > 0;
+}
+function countAssertions(path, text) {
+  const assertion = path.endsWith(".py") ? PYTHON_ASSERTION : JS_ASSERTION;
+  return (text ?? "").split("\n").filter((l) => assertion.test(l)).length;
+}
+function threshold(text) {
+  const m = COVERAGE_THRESHOLD.exec(text ?? "");
+  return m ? Number(m[1]) : void 0;
+}
+
+// src/rules/js-builtins.ts
+var NODE_BUILTINS = /* @__PURE__ */ new Set([
+  "_http_agent",
+  "_http_client",
+  "_http_common",
+  "_http_incoming",
+  "_http_outgoing",
+  "_http_server",
+  "_stream_duplex",
+  "_stream_passthrough",
+  "_stream_readable",
+  "_stream_transform",
+  "_stream_wrap",
+  "_stream_writable",
+  "_tls_common",
+  "_tls_wrap",
+  "assert",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "domain",
+  "events",
+  "fs",
+  "http",
+  "http2",
+  "https",
+  "inspector",
+  "module",
+  "net",
+  "os",
+  "path",
+  "perf_hooks",
+  "process",
+  "punycode",
+  "querystring",
+  "readline",
+  "repl",
+  "stream",
+  "string_decoder",
+  "sys",
+  "timers",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib"
+]);
+
+// src/rules/js-manifests.ts
+var DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+function jsManifests(ctx) {
+  const packages = [];
+  const local = /* @__PURE__ */ new Set();
+  const aliases = [];
+  for (const path of ctx.listHead()) {
+    const base = path.split("/").pop();
+    if (base === "package.json") {
+      const json = parseJson(ctx.readHead(path));
+      if (!json) continue;
+      const names = /* @__PURE__ */ new Set();
+      for (const field of DEPENDENCY_FIELDS) {
+        const deps = json[field];
+        if (deps && typeof deps === "object") Object.keys(deps).forEach((n) => names.add(n));
+      }
+      if (typeof json.name === "string") {
+        names.add(json.name);
+        local.add(json.name);
+      }
+      packages.push({ path, dir: path.slice(0, -base.length), names });
+    } else if (/^[jt]sconfig[\w.-]*\.json$/.test(base)) {
+      aliases.push(...pathAliases(ctx.readHead(path) ?? ""));
+    }
+  }
+  return {
+    forFile: (file) => packages.filter((p) => file.startsWith(p.dir)).sort((a, b) => b.dir.length - a.dir.length),
+    local,
+    aliases
+  };
+}
+function parseJson(text) {
+  try {
+    const value = JSON.parse(text ?? "");
+    return value && typeof value === "object" ? value : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function pathAliases(text) {
+  const at = text.search(/"paths"\s*:\s*\{/);
+  if (at < 0) return [];
+  const body = text.slice(text.indexOf("{", at) + 1, text.indexOf("}", at));
+  return [...body.matchAll(/"([^"]+)"\s*:\s*\[/g)].map((m) => m[1].replace(/\*$/, ""));
+}
+
 // src/rules/python-manifests.ts
 var REQUIREMENTS = /(^|\/)(requirements[^/]*\.(txt|in)|requirements\/[^/]+\.(txt|in))$/;
 var REQUIREMENT_NAME = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)/;
 function declaredDependencies(ctx) {
   const manifests = [];
+  const dynamic = [];
   const names = /* @__PURE__ */ new Set();
   const add = (requirement) => {
     const m = REQUIREMENT_NAME.exec(requirement);
@@ -1703,12 +1875,16 @@ function declaredDependencies(ctx) {
     if (base === "pyproject.toml") found = fromPyproject(ctx.readHead(path) ?? "");
     else if (REQUIREMENTS.test(path)) found = fromRequirements(ctx.readHead(path) ?? "");
     else if (base === "setup.cfg") found = fromSetupCfg(ctx.readHead(path) ?? "");
-    else if (base === "setup.py") found = fromSetupPy(ctx.readHead(path) ?? "");
+    else if (base === "setup.py") {
+      const text = ctx.readHead(path) ?? "";
+      found = fromSetupPy(text);
+      if (setupPyIsDynamic(text)) dynamic.push(path);
+    }
     if (found === void 0) continue;
     manifests.push(path);
     found.forEach(add);
   }
-  return { manifests, names };
+  return { manifests, names, dynamic };
 }
 function fromPyproject(text) {
   let doc;
@@ -1775,10 +1951,19 @@ function fromSetupCfg(text) {
 }
 function fromSetupPy(text) {
   const out = [];
-  for (const m of text.matchAll(/(install_requires|tests_require|extras_require)\s*=\s*([[{][^\]}]*[\]}])/g)) {
-    for (const s of m[2].matchAll(/["']([^"']+)["']/g)) out.push(s[1]);
+  for (const s of text.matchAll(/(["'])([A-Za-z0-9][A-Za-z0-9._-]*(?:\[[\w,\s-]*\])?\s*(?:[<>=!~;@][^"'\n]*)?)\1/g)) {
+    out.push(s[2]);
   }
   return out;
+}
+function setupPyIsDynamic(text) {
+  for (const m of text.matchAll(/\b(install_requires|extras_require|tests_require)\s*=\s*([^\s,)]+)/g)) {
+    const value = m[2];
+    if (/^[[{]/.test(value)) continue;
+    if (/^[A-Za-z_]\w*$/.test(value) && new RegExp(`^${value}\\s*=\\s*[[{]`, "m").test(text)) continue;
+    return true;
+  }
+  return false;
 }
 
 // src/rules/python-stdlib.ts
@@ -2129,32 +2314,40 @@ var KNOWN_DISTRIBUTIONS = {
   telegram: ["python-telegram-bot"],
   websocket: ["websocket-client"],
   yaml: ["pyyaml"],
+  _pytest: ["pytest"],
   zmq: ["pyzmq"]
 };
 var depsUndeclared = {
   id: "deps/undeclared",
-  version: "0.2.0",
+  version: "0.3.0",
+  keys: "the imported module (Python) or package (JavaScript), e.g. `boto3`",
   description: "Python and JavaScript/TypeScript imports added in the diff whose package is not declared in a dependency manifest.",
   run(ctx) {
     return [...python(ctx), ...javascript(ctx)];
   }
 };
+var PYTHON_TEST_PATH = /(^|\/)(tests?|testing)\/|(^|\/)(test_[^/]*|[^/]*_test|conftest)\.py$/;
+var TEST_RUNNERS = /* @__PURE__ */ new Set(["pytest", "_pytest"]);
 function python(ctx) {
   const pyFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && f.path.endsWith(".py"));
   if (pyFiles.length === 0) return [];
   const declared = declaredDependencies(ctx);
-  if (declared.manifests.length === 0) return [];
+  if (declared.manifests.length === 0 || declared.dynamic.length > 0) return [];
   const local = localModules(ctx.listHead());
   const where2 = declared.manifests.length <= 3 ? declared.manifests.join(", ") : `any of ${declared.manifests.length} dependency manifests`;
   const findings = [];
   for (const file of pyFiles) {
-    const optional = optionalModules((ctx.readHead(file.path) ?? "").split("\n"));
+    const text = ctx.readHead(file.path) ?? "";
+    const optional = optionalModules(text.split("\n"));
+    const inStrings = stringLines(text);
+    const runners = PYTHON_TEST_PATH.test(file.path) ? TEST_RUNNERS : /* @__PURE__ */ new Set();
     for (const l of file.lines) {
-      if (l.kind !== "add") continue;
+      if (l.kind !== "add" || inStrings.has(l.newLine)) continue;
       for (const mod of importedModules(l.text)) {
-        if (PYTHON_STDLIB.has(mod) || local.has(mod) || optional.has(mod)) continue;
+        if (PYTHON_STDLIB.has(mod) || local.has(mod) || optional.has(mod) || runners.has(mod)) continue;
         if (candidates(mod).some((c) => declared.names.has(c))) continue;
         findings.push({
+          key: mod,
           message: `Imports \`${mod}\`, not declared in ${where2}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim()
@@ -2186,6 +2379,7 @@ function javascript(ctx) {
         if (packages.some((p) => p.names.has(name) || p.names.has(typesPackage(name)))) continue;
         if (isInTryBlock(lines, l.newLine - 1)) continue;
         findings.push({
+          key: name,
           message: `Imports \`${name}\`, not declared in ${where2}`,
           locations: [{ path: file.path, line: l.newLine }],
           evidence: l.text.trim()
@@ -2251,6 +2445,7 @@ var STANDARD_PREFIXES = ["GITHUB_", "RUNNER_", "LC_", "npm_"];
 var envMissingExample = {
   id: "env/missing-example",
   version: "0.2.0",
+  keys: "the variable name, e.g. `AWS_REGION`",
   description: "Environment variables read in added Python or JavaScript/TypeScript code but missing from the example env file.",
   run(ctx) {
     const sources = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && envReader(f.path));
@@ -2280,6 +2475,7 @@ var envMissingExample = {
         for (const name of new Set(read(l.text))) {
           if (documented.has(name) || removedReads.has(name) || isStandard(name)) continue;
           findings.push({
+            key: name,
             message: `Reads environment variable \`${name}\`, missing from ${where2}`,
             locations: [{ path: file.path, line: l.newLine }],
             evidence: l.text.trim()
@@ -2299,8 +2495,317 @@ function envReader(path) {
   return void 0;
 }
 
+// src/rules/signatures.ts
+var PY_DEF = /^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/;
+var PY_CLASS = /^class\s+([A-Za-z_]\w*)\b/;
+function pythonSignatures(text) {
+  const lines = text.split("\n");
+  const inStrings = stringLines(text);
+  const out = [];
+  let cls;
+  lines.forEach((line, i) => {
+    if (inStrings.has(i + 1)) return;
+    if (/^\S/.test(line) && !/^(@|#|\)|\])/.test(line)) {
+      cls = PY_CLASS.exec(line)?.[1];
+    }
+    const m = PY_DEF.exec(line);
+    if (!m) return;
+    const indented = m[1].length > 0;
+    const name = m[2];
+    if (indented && !cls) return;
+    if (cls && indented && m[1].length !== 4 && m[1] !== "	") return;
+    if (!indented) cls = void 0;
+    const owner = indented ? cls : void 0;
+    if (owner?.startsWith("_") || name.startsWith("_") && name !== "__init__") return;
+    const decorators = decoratorsAbove(lines, i);
+    if (decorators.some((d) => /^@(\w+\.(setter|getter|deleter)|(functools\.)?(cached_)?property)\b/.test(d))) return;
+    const raw = paramsFrom(lines, i, line.indexOf("(", m[0].length - 1), "#");
+    if (raw === void 0) return;
+    let params = splitParams(raw).map(pythonParam).filter((p) => p !== "");
+    if (owner && (params[0] === "self" || params[0] === "cls")) params = params.slice(1);
+    const overload = decorators.some((d) => /^@(typing\.)?overload\b/.test(d));
+    out.push({ name: owner ? `${owner}.${name}` : name, params, shape: params.join(", "), line: i + 1, overload });
+  });
+  const lastPlain = new Map(out.filter((s) => !s.overload).map((s) => [s.name, s]));
+  return mergeOverloads(out.filter((s) => s.overload || lastPlain.get(s.name) === s).map(({ overload: _, ...s }) => s));
+}
+function decoratorsAbove(lines, index) {
+  const out = [];
+  for (let i = index - 1; i >= 0 && lines[i].trim().startsWith("@"); i--) out.push(lines[i].trim());
+  return out;
+}
+var JS_EXPORTED = [
+  /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*(?:<[^(]*>)?\s*\(/,
+  /^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:function\s*\*?\s*[\w$]*\s*)?(?:<[^(]*>)?\s*\(/
+];
+function jsSignatures(text) {
+  const lines = text.split("\n");
+  const out = [];
+  lines.forEach((line, i) => {
+    for (const re of JS_EXPORTED) {
+      const m = re.exec(line);
+      if (!m) continue;
+      if (re === JS_EXPORTED[1] && !isArrowOrFunction(lines, i, m[0].length - 1)) continue;
+      const raw = paramsFrom(lines, i, m[0].length - 1, "//");
+      if (raw === void 0) continue;
+      const params = splitParams(raw).map(jsParam).filter((p) => p !== "" && p !== "this");
+      const shape = params.map((p) => p.replace(/^(\.\.\.)?[A-Za-z_$][\w$]*/, "$1_")).join(", ");
+      out.push({ name: m[1], params, shape, line: i + 1 });
+      break;
+    }
+  });
+  return mergeOverloads(out);
+}
+function mergeOverloads(sigs) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const s of sigs) {
+    const prev = byName.get(s.name);
+    if (!prev) byName.set(s.name, { ...s, shapes: /* @__PURE__ */ new Set([s.shape]) });
+    else if (!prev.shapes.has(s.shape)) {
+      prev.shapes.add(s.shape);
+      byName.set(s.name, { ...prev, params: [...prev.params, "|", ...s.params], shape: `${prev.shape} | ${s.shape}` });
+    }
+  }
+  return [...byName.values()].map(({ shapes: _, ...s }) => s);
+}
+function describeChange(before, after, positional = false) {
+  if (before.includes("|") || after.includes("|")) return `went from \`${overloads(before)}\` to \`${overloads(after)}\``;
+  if (positional) return describePositional(before, after);
+  const name = (p) => p.split("=")[0].replace(/\?$/, "");
+  const old = new Map(before.map((p) => [name(p), p]));
+  const now = new Map(after.map((p) => [name(p), p]));
+  const parts = [];
+  const added = after.filter((p) => !old.has(name(p)));
+  const removed = before.filter((p) => !now.has(name(p)));
+  const changed = after.filter((p) => old.has(name(p)) && old.get(name(p)) !== p);
+  if (added.length) parts.push(`added ${added.map((p) => `\`${p}\``).join(", ")}`);
+  if (removed.length) parts.push(`removed ${removed.map((p) => `\`${p}\``).join(", ")}`);
+  if (changed.length) parts.push(`changed ${changed.map((p) => `\`${old.get(name(p))}\` to \`${p}\``).join(", ")}`);
+  if (parts.length === 0) parts.push(`changed order from \`(${before.join(", ")})\` to \`(${after.join(", ")})\``);
+  return parts.join("; ");
+}
+function isArrowOrFunction(lines, index, open) {
+  const before = lines[index].slice(0, open);
+  if (/function\s*\*?\s*[\w$]*\s*(<[^(]*>)?\s*$/.test(before)) return true;
+  const rest = closingParen(lines, index, open);
+  return rest !== void 0 && /^\s*(:\s*[^=]+)?=>/.test(rest);
+}
+function closingParen(lines, index, open) {
+  let depth = 0;
+  for (let i = index; i < Math.min(lines.length, index + 50); i++) {
+    const line = lines[i];
+    for (let j = i === index ? open : 0; j < line.length; j++) {
+      const c = line[j];
+      if (c === "(") depth++;
+      else if (c === ")" && --depth === 0) return line.slice(j + 1);
+    }
+  }
+  return void 0;
+}
+function paramsFrom(lines, index, open, comment) {
+  let depth = 0;
+  let text = "";
+  let quote;
+  for (let i = index; i < Math.min(lines.length, index + 50); i++) {
+    const line = lines[i];
+    for (let j = i === index ? open : 0; j < line.length; j++) {
+      const c = line[j];
+      if (quote) {
+        if (c === "\\") {
+          text += c + (line[j + 1] ?? "");
+          j++;
+          continue;
+        }
+        if (c === quote) quote = void 0;
+      } else if (c === '"' || c === "'" || c === "`") {
+        quote = c;
+      } else if (line.startsWith(comment, j)) {
+        break;
+      } else if ("([{".includes(c)) {
+        depth++;
+        if (depth === 1 && c === "(") continue;
+      } else if (")]}".includes(c)) {
+        depth--;
+        if (depth === 0) return text;
+      }
+      text += c;
+    }
+    text += " ";
+  }
+  return void 0;
+}
+function splitParams(raw) {
+  const parts = [];
+  let depth = 0;
+  let quote;
+  let cur = "";
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (quote) {
+      if (c === "\\") {
+        cur += c + (raw[i + 1] ?? "");
+        i++;
+        continue;
+      }
+      if (c === quote) quote = void 0;
+    } else if (c === '"' || c === "'" || c === "`") quote = c;
+    else if ("([{<".includes(c)) depth++;
+    else if (")]}>".includes(c) && !(c === ">" && raw[i - 1] === "=")) depth--;
+    else if (c === "," && depth === 0) {
+      parts.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts.map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+}
+function pythonParam(param) {
+  const [head, def] = splitTopLevel(param, "=");
+  const name = splitTopLevel(head, ":")[0].trim();
+  if (def?.trim() === "undefined") return name.endsWith("?") ? name : `${name}?`;
+  return def === void 0 ? name : `${name}=${def.trim()}`;
+}
+function jsParam(param) {
+  const [head, def] = splitTopLevel(param.replace(/\/\*[\s\S]*?\*\//g, " "), "=");
+  let name = head.trim();
+  if (!/^[{[]/.test(name)) name = splitTopLevel(name, ":")[0].trim();
+  else name = name.replace(/\}\s*:.*$/s, "}").replace(/\]\s*:.*$/s, "]");
+  name = name.replace(/^(public|private|protected|readonly)\s+/, "");
+  if (def?.trim() === "undefined") return name.endsWith("?") ? name : `${name}?`;
+  return def === void 0 ? name : `${name}=${def.trim()}`;
+}
+function splitTopLevel(s, sep) {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if ("([{<".includes(c)) depth++;
+    else if (")]}>".includes(c) && !(c === ">" && s[i - 1] === "=")) depth--;
+    else if (c === sep && depth === 0 && !(sep === "=" && (s[i + 1] === "=" || s[i + 1] === ">" || "!<>".includes(s[i - 1] ?? "")))) {
+      return [s.slice(0, i), s.slice(i + 1)];
+    }
+  }
+  return [s, void 0];
+}
+function overloads(params) {
+  return `(${params.join(", ")})`.replace(/, \|, /g, ") | (");
+}
+function describePositional(before, after) {
+  const shape = (p) => p.replace(/^(\.\.\.)?[A-Za-z_$][\w$]*/, "$1_");
+  const parts = [];
+  const changed = [];
+  for (let i = 0; i < Math.min(before.length, after.length); i++) {
+    if (shape(before[i]) !== shape(after[i])) changed.push(`\`${before[i]}\` to \`${after[i]}\``);
+  }
+  if (after.length > before.length) parts.push(`added ${after.slice(before.length).map((p) => `\`${p}\``).join(", ")}`);
+  if (before.length > after.length) parts.push(`removed ${before.slice(after.length).map((p) => `\`${p}\``).join(", ")}`);
+  if (changed.length) parts.push(`changed ${changed.join(", ")}`);
+  return parts.join("; ");
+}
+
+// src/rules/interface-untested.ts
+var PYTHON_TEST_FILE2 = /(^|\/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py)$/;
+var JS_TEST_FILE = /(^|\/)(__tests__|tests?|e2e|spec)\/.*\.[cm]?[jt]sx?$|\.(test|spec|test-d)\.[cm]?[jt]sx?$/;
+var PYTHON_TEST_DIR = /(^|\/)tests?\//;
+var interfaceUntested = {
+  id: "interface/untested-change",
+  version: "0.1.0",
+  keys: "the function name, e.g. `load_settings` or `Store.add`",
+  description: "Public functions whose parameters changed (added, removed, reordered, new defaults, or renamed where callers pass them by name) while no test file changed by the diff mentions them. Only in repositories that have tests.",
+  run(ctx) {
+    const head = ctx.listHead();
+    if (!head.some(isTestFile2)) return [];
+    const changedTests = ctx.files.filter((f) => f.status !== "deleted" && !f.binary && isTestFile2(f.path)).map((f) => ctx.readHead(f.path) ?? "");
+    const findings = [];
+    for (const file of ctx.files) {
+      if (file.binary || file.status === "added" || file.status === "deleted") continue;
+      if (isTestFile2(file.path) || PYTHON_TEST_DIR.test(file.path)) continue;
+      const extract = signatureReader(file.path);
+      if (!extract) continue;
+      const before = new Map(extract(ctx.readBase(file.oldPath) ?? "").map((s) => [s.name, s]));
+      const touched = new Set(file.lines.filter((l) => l.kind === "add").map((l) => l.newLine));
+      for (const sig of extract(ctx.readHead(file.path) ?? "")) {
+        const old = before.get(sig.name);
+        if (!old || old.shape === sig.shape || !touchesDefinition(ctx, file.path, sig, touched)) continue;
+        const parts = sig.name.split(".");
+        const bare = parts.length > 1 && parts[1] === "__init__" ? parts[0] : parts[parts.length - 1];
+        const word = new RegExp(`\\b${bare.replace(/\$/g, "\\$")}\\b`);
+        if (changedTests.some((t) => word.test(t))) continue;
+        findings.push({
+          key: sig.name,
+          message: `Parameters of \`${sig.name}\`: ${describeChange(old.params, sig.params, !file.path.endsWith(".py"))}; no test changed by the diff mentions it`,
+          locations: [{ path: file.path, line: sig.line }],
+          evidence: (ctx.readHead(file.path) ?? "").split("\n")[sig.line - 1].trim()
+        });
+      }
+    }
+    return findings;
+  }
+};
+function signatureReader(path) {
+  if (path.endsWith(".py")) return pythonSignatures;
+  if (JS_FILE.test(path) && !/\.(vue|svelte)$/.test(path)) return jsSignatures;
+  return void 0;
+}
+function isTestFile2(path) {
+  return PYTHON_TEST_FILE2.test(path) || JS_TEST_FILE.test(path);
+}
+function touchesDefinition(ctx, path, sig, touched) {
+  const lines = (ctx.readHead(path) ?? "").split("\n");
+  for (let n = sig.line; n <= Math.min(lines.length, sig.line + 50); n++) {
+    if (touched.has(n)) return true;
+    if (/\)\s*(->[^:]*)?:\s*(#.*)?$|\)\s*(:[^=]*)?(=>|\{)/.test(lines[n - 1])) return false;
+  }
+  return false;
+}
+
+// src/rules/tests-delta.ts
+var testsDelta = {
+  id: "tests/delta",
+  version: "0.1.0",
+  keys: "the test id, `classname::name` as in the JUnit report, or `no-tests`",
+  description: "Differences between the test results at base and at head, read from JUnit reports: tests that pass at base and fail at head, tests that ran at base and are skipped or missing at head. Runs only when reports are given.",
+  run(ctx) {
+    if (!ctx.tests) return [];
+    const { base, head } = ctx.tests;
+    const where2 = head.files[0] ?? "junit";
+    const finding = (key, message, evidence) => ({
+      key,
+      message,
+      locations: [{ path: where2 }],
+      evidence
+    });
+    if (head.results.size === 0 && base.results.size > 0) {
+      return [finding("no-tests", `No test results at head; ${base.results.size} at base`, `tests: ${base.results.size} -> 0`)];
+    }
+    const findings = [];
+    for (const [id, now] of head.results) {
+      const before = base.results.get(id);
+      if (before === "passed" && now === "failed") {
+        findings.push(finding(id, `Test \`${id}\` fails at head and passed at base`, `${id}: passed -> failed`));
+      } else if (before !== void 0 && before !== "skipped" && now === "skipped") {
+        findings.push(finding(id, `Test \`${id}\` is skipped at head and ran at base`, `${id}: ${before} -> skipped`));
+      }
+    }
+    if (head.results.size < base.results.size) {
+      for (const [id, before] of base.results) {
+        if (head.results.has(id)) continue;
+        findings.push(
+          finding(
+            id,
+            `Test \`${id}\` ran at base and is missing at head (${base.results.size} tests at base, ${head.results.size} at head)`,
+            `${id}: ${before} -> missing`
+          )
+        );
+      }
+    }
+    return findings;
+  }
+};
+
 // src/rules/index.ts
-var ALL_RULES = [checksDisabled, depsUndeclared, envMissingExample];
+var ALL_RULES = [checksDisabled, depsUndeclared, envMissingExample, interfaceUntested, testsDelta];
 
 // src/report/json.ts
 function toJson(report) {
@@ -2337,6 +2842,7 @@ function toMarkdown(report) {
     }
   }
   const opts = report.options.map((o) => ` ${o}`).join("");
+  if (report.config) lines.push("", `Configuration: \`${report.config}\` from the base commit.`);
   lines.push(
     "",
     `Reproduce: \`rsp check --base ${report.base} --head ${report.head}${opts}\``,
@@ -2365,10 +2871,28 @@ function short(sha) {
 
 // src/index.ts
 function check(opts) {
-  const rules = opts.rules ? selectRules(opts.rules) : ALL_RULES;
   const exclude = [...new Set(opts.exclude ?? [])].sort();
   const ctx = buildContext(opts.repoDir, opts.base, opts.head ?? "HEAD", exclude);
-  return runRules(ctx, rules, exclude.map((g) => `--exclude ${shellQuote(g)}`));
+  const text = opts.config === false ? void 0 : ctx.readBase(CONFIG_FILE);
+  const config = text === void 0 ? void 0 : parseConfig(text, ALL_RULES);
+  if (config && config.exclude.length > 0) {
+    const excluded = config.exclude.map(globToRegExp);
+    ctx.files = ctx.files.filter((f) => !excluded.some((re) => re.test(f.path) || re.test(f.oldPath)));
+  }
+  if (opts.junitBase?.length && opts.junitHead?.length) {
+    const read = (paths) => mergeRuns(paths.map((path) => ({ path, xml: readFileSync(path, "utf8") })));
+    ctx.tests = { base: read(opts.junitBase), head: read(opts.junitHead) };
+  } else if (opts.junitBase?.length || opts.junitHead?.length) {
+    throw new Error("JUnit reports must be given for both base and head");
+  }
+  const rules = opts.rules ? selectRules(opts.rules) : ALL_RULES.filter((r) => config?.rules[r.id]?.enabled !== false);
+  const options = [
+    ...exclude.map((g) => `--exclude ${shellQuote(g)}`),
+    ...opts.config === false ? ["--no-config"] : [],
+    ...(ctx.tests?.base.files ?? []).map((f) => `--junit-base ${shellQuote(f)}`),
+    ...(ctx.tests?.head.files ?? []).map((f) => `--junit-head ${shellQuote(f)}`)
+  ];
+  return runRules(ctx, rules, options, config);
 }
 function selectRules(ids) {
   const unknown = ids.filter((id) => !ALL_RULES.some((r) => r.id === id));
@@ -2381,6 +2905,65 @@ function shellQuote(s) {
   return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+// src/test-runner.ts
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync as readFileSync2, rmSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+function runTestsAtBaseAndHead(opts) {
+  const head = resolveCommit(opts.repoDir, opts.head);
+  const base = mergeBase(opts.repoDir, resolveCommit(opts.repoDir, opts.base), head);
+  const reports = join(opts.workDir, "rsp-junit");
+  mkdirSync(reports, { recursive: true });
+  const runAt = (label, commit, attempt) => {
+    const dir = join(opts.workDir, `rsp-${label}`);
+    if (attempt === 0) {
+      rmSync(dir, { recursive: true, force: true });
+      git(opts.repoDir, ["worktree", "add", "--detach", "--force", dir, commit]);
+    }
+    opts.log(`::group::rsp: tests at ${label} ${commit.slice(0, 12)}${attempt > 0 ? ` (rerun ${attempt})` : ""}`);
+    const res = spawnSync("bash", ["-c", opts.command], { cwd: dir, stdio: ["ignore", "inherit", "inherit"] });
+    opts.log(`::endgroup::`);
+    opts.log(`rsp: test command at ${label} exited with ${res.status ?? res.signal}`);
+    const found = findFiles(dir, globToRegExp(opts.junit));
+    if (found.length === 0) opts.log(`::warning::rsp: the test command wrote no file matching ${opts.junit} at ${label}`);
+    return found.map((f, i) => {
+      const target = join(reports, `${label}-${attempt}-${i}.xml`);
+      copyFileSync(join(dir, f), target);
+      return target;
+    });
+  };
+  try {
+    const junitBase = runAt("base", base, 0);
+    const junitHead = runAt("head", head, 0);
+    const read = (paths) => mergeRuns(paths.map((path) => ({ path, xml: readFileSync2(path, "utf8") })));
+    const baseResults = read(junitBase).results;
+    for (let attempt = 1; attempt <= opts.retries; attempt++) {
+      const headResults = read(junitHead).results;
+      const newFailures = [...headResults].filter(([id, s]) => s === "failed" && baseResults.get(id) === "passed");
+      if (newFailures.length === 0) break;
+      junitHead.push(...runAt("head", head, attempt));
+    }
+    return { junitBase, junitHead };
+  } finally {
+    for (const label of ["base", "head"]) {
+      try {
+        git(opts.repoDir, ["worktree", "remove", "--force", join(opts.workDir, `rsp-${label}`)]);
+      } catch {
+      }
+    }
+  }
+}
+function findFiles(root, pattern, dir = root, out = []) {
+  for (const entry of readdirSync(dir).sort()) {
+    if (entry === ".git" || entry === "node_modules" || entry === ".venv") continue;
+    const path = join(dir, entry);
+    const rel = relative(root, path);
+    if (statSync(path).isDirectory()) findFiles(root, pattern, path, out);
+    else if (pattern.test(rel)) out.push(rel);
+  }
+  return out;
+}
+
 // src/action.ts
 var COMMENT_MARKER = "<!-- rsp:report -->";
 async function runAction(env = process.env, fetchImpl = fetch) {
@@ -2391,28 +2974,58 @@ async function runAction(env = process.env, fetchImpl = fetch) {
     log(`::error::fail-on must be "never" or "any", got "${failOn}"`);
     return 1;
   }
-  const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH ?? "", "utf8"));
+  const event = JSON.parse(readFileSync3(env.GITHUB_EVENT_PATH ?? "", "utf8"));
   const pr = event.pull_request;
   if (!pr) {
     log(`::notice::rsp checks pull requests; event "${env.GITHUB_EVENT_NAME}" has none, nothing to do.`);
     return 0;
   }
+  const repoDir = env.GITHUB_WORKSPACE ?? process.cwd();
+  const retries = Number(input("test-retries") || "1");
+  if (!Number.isInteger(retries) || retries < 0) {
+    log(`::error::test-retries must be a whole number, got "${input("test-retries")}"`);
+    return 1;
+  }
+  let junit;
+  if (input("test-command")) {
+    try {
+      junit = runTestsAtBaseAndHead({
+        repoDir,
+        base: pr.base.sha,
+        head: pr.head.sha,
+        command: input("test-command"),
+        junit: input("junit") || "**/junit*.xml",
+        retries,
+        workDir: env.RUNNER_TEMP ?? process.cwd(),
+        log
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`::error::rsp could not run the tests at base and head: ${escapeData(msg)}`);
+      return 1;
+    }
+  }
   let report;
   try {
     report = check({
-      repoDir: env.GITHUB_WORKSPACE ?? process.cwd(),
+      repoDir,
       base: pr.base.sha,
       head: pr.head.sha,
       rules: list("rules").length > 0 ? list("rules") : void 0,
-      exclude: list("exclude")
+      exclude: list("exclude"),
+      ...junit
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof ConfigError) {
+      log(`::error::rsp configuration is invalid: ${escapeData(msg)}`);
+      return 1;
+    }
     log(`::error::rsp could not read the pull request commits. Check out with fetch-depth: 0. ${escapeData(msg)}`);
     return 1;
   }
   const markdown = toMarkdown(report);
-  const reportPath = join(env.RUNNER_TEMP ?? process.cwd(), "rsp-report.json");
+  const reportPath = join2(env.RUNNER_TEMP ?? process.cwd(), "rsp-report.json");
   writeFileSync(reportPath, toJson(report));
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, markdown);
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `findings=${report.findings.length}

@@ -128,7 +128,7 @@ export function nonCodeLines(text: string): Set<number> {
       continue;
     }
     if (state === "'" || state === '"') {
-      if (c === "\\") i++;
+      if (c === "\\" && text[i + 1] !== "\n") i++;
       else if (c === state) {
         state = "code";
         prev = "a";
@@ -136,7 +136,7 @@ export function nonCodeLines(text: string): Set<number> {
       continue;
     }
     if (state === "regex") {
-      if (c === "\\") i++;
+      if (c === "\\" && text[i + 1] !== "\n") i++;
       else if (c === "[") inClass = true;
       else if (c === "]") inClass = false;
       else if (c === "/" && !inClass) {
@@ -146,7 +146,7 @@ export function nonCodeLines(text: string): Set<number> {
       continue;
     }
     if (top === "template") {
-      if (c === "\\") i++;
+      if (c === "\\" && text[i + 1] !== "\n") i++;
       else if (c === "`") {
         stack.pop();
         prev = "a";

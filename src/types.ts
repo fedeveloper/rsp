@@ -1,3 +1,5 @@
+import type { TestRun } from "./junit.js";
+
 export type FileStatus = "added" | "modified" | "deleted" | "renamed";
 
 export interface DiffLine {
@@ -32,6 +34,8 @@ export interface DiffContext {
   readHead(path: string): string | undefined;
   /** Every file path tracked at head, sorted. */
   listHead(): string[];
+  /** Test results at base and head, when JUnit reports were given. */
+  tests?: { base: TestRun; head: TestRun };
 }
 
 export interface Location {
@@ -42,6 +46,11 @@ export interface Location {
 export interface Finding {
   ruleId: string;
   ruleVersion: string;
+  /**
+   * What `allow` in .rsp.toml matches to accept this finding: a pattern id, a
+   * package, a variable or a symbol name, depending on the rule.
+   */
+  key: string;
   /** A fact about the diff, never a judgement. */
   message: string;
   locations: Location[];
@@ -54,12 +63,16 @@ export interface Finding {
 }
 
 /** What a rule returns; the engine adds version, fingerprint and reproduce. */
-export type RawFinding = Pick<Finding, "message" | "locations" | "evidence">;
+export type RawFinding = Pick<Finding, "key" | "message" | "locations" | "evidence">;
 
 export interface Rule {
   id: string;
   version: string;
   description: string;
+  /** What the keys of this rule's findings are, for `allow` in .rsp.toml. */
+  keys: string;
+  /** Every key the rule can report, when it is a closed set; `allow` is checked against it. */
+  knownKeys?: string[];
   run(ctx: DiffContext): RawFinding[];
 }
 
@@ -69,6 +82,8 @@ export interface Report {
   head: string;
   /** Extra CLI flags the run used, such as `--exclude`. */
   options: string[];
+  /** The configuration file read from the base commit, or null. */
+  config: string | null;
   rules: { id: string; version: string }[];
   findings: Finding[];
 }
