@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "tests/test_auth.py", "line": 6, "message": "Added pytest skip marker", "evidence": "@pytest.mark.skip(reason=\"flaky\")"}
+]

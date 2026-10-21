@@ -1,0 +1,5 @@
+[
+  {"ruleId": "checks/disabled", "path": "tests/test_parser.py", "line": 9, "message": "Added unittest skip decorator", "evidence": "@unittest.skip(\"TODO\")"},
+  {"ruleId": "checks/disabled", "path": "tests/test_parser.py", "line": 14, "message": "Added pytest xfail marker", "evidence": "@pytest.mark.xfail"},
+  {"ruleId": "checks/disabled", "path": "tests/test_parser.py", "line": 20, "message": "Added pytest.skip() call", "evidence": "pytest.skip(\"encoding issue\")"}
+]

@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "tests/test_billing.py", "message": "Test file deleted", "evidence": "deleted: tests/test_billing.py"}
+]
