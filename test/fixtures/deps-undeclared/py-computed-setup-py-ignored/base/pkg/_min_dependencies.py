@@ -1,0 +1,1 @@
+NUMPY_MIN_VERSION = "1.17"

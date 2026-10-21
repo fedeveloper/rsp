@@ -120,3 +120,67 @@ function stripComment(line: string): string {
   }
   return line;
 }
+
+/**
+ * 1-based numbers of the lines that start inside a triple-quoted string, such
+ * as a docstring or source code written to a file by a test. Their content is
+ * text, not statements.
+ */
+export function stringLines(text: string): Set<number> {
+  const out = new Set<number>();
+  let line = 1;
+  let quote: string | undefined; // the closing delimiter of the open string
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === "\n") {
+      line++;
+      if (quote && quote.length === 1) quote = undefined; // unterminated single-line string
+      if (quote) out.add(line);
+      continue;
+    }
+    if (quote) {
+      // A backslash before a newline continues the string; the newline still counts.
+      if (c === "\\" && text[i + 1] !== "\n") i++;
+      else if (text.startsWith(quote, i)) {
+        i += quote.length - 1;
+        quote = undefined;
+      }
+    } else if (c === "#") {
+      while (i + 1 < text.length && text[i + 1] !== "\n") i++;
+    } else if (c === '"' || c === "'") {
+      quote = text.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
+      i += quote.length - 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * The line with the contents of its string literals replaced by spaces, so
+ * that patterns match code and comments only. A string left open at the end of
+ * the line is blanked to the end.
+ */
+export function blankStrings(line: string): string {
+  let out = "";
+  let quote: string | undefined;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (quote) {
+      if (c === "\\") {
+        out += "  ";
+        i++;
+      } else if (line.startsWith(quote, i)) {
+        out += quote;
+        i += quote.length - 1;
+        quote = undefined;
+      } else out += " ";
+    } else if (c === "#") {
+      return out + line.slice(i);
+    } else if (c === '"' || c === "'") {
+      quote = line.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
+      out += quote;
+      i += quote.length - 1;
+    } else out += c;
+  }
+  return out;
+}

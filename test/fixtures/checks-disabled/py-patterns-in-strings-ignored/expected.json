@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "pkg/core.py", "line": 8, "message": "Added noqa comment", "evidence": "import json  # noqa: F401"}
+]

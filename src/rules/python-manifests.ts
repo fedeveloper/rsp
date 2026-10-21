@@ -7,6 +7,8 @@ export interface DeclaredDeps {
   manifests: string[];
   /** Normalized distribution names declared in any of them. */
   names: Set<string>;
+  /** Manifests whose dependency lists are computed from other files, so the names above may be incomplete. */
+  dynamic: string[];
 }
 
 const REQUIREMENTS = /(^|\/)(requirements[^/]*\.(txt|in)|requirements\/[^/]+\.(txt|in))$/;
@@ -18,6 +20,7 @@ const REQUIREMENT_NAME = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)/;
  */
 export function declaredDependencies(ctx: DiffContext): DeclaredDeps {
   const manifests: string[] = [];
+  const dynamic: string[] = [];
   const names = new Set<string>();
   const add = (requirement: string) => {
     const m = REQUIREMENT_NAME.exec(requirement);
@@ -30,12 +33,16 @@ export function declaredDependencies(ctx: DiffContext): DeclaredDeps {
     if (base === "pyproject.toml") found = fromPyproject(ctx.readHead(path) ?? "");
     else if (REQUIREMENTS.test(path)) found = fromRequirements(ctx.readHead(path) ?? "");
     else if (base === "setup.cfg") found = fromSetupCfg(ctx.readHead(path) ?? "");
-    else if (base === "setup.py") found = fromSetupPy(ctx.readHead(path) ?? "");
+    else if (base === "setup.py") {
+      const text = ctx.readHead(path) ?? "";
+      found = fromSetupPy(text);
+      if (setupPyIsDynamic(text)) dynamic.push(path);
+    }
     if (found === undefined) continue;
     manifests.push(path);
     found.forEach(add);
   }
-  return { manifests, names };
+  return { manifests, names, dynamic };
 }
 
 function fromPyproject(text: string): string[] {
@@ -106,10 +113,27 @@ function fromSetupCfg(text: string): string[] {
   return out;
 }
 
+/**
+ * Every requirement-shaped string literal in setup.py. Lists are often built
+ * in variables, with `+` or behind conditions, so reading only the literal
+ * after `install_requires=` misses declarations; reading more strings than
+ * needed can only hide a finding, never invent one.
+ */
 function fromSetupPy(text: string): string[] {
   const out: string[] = [];
-  for (const m of text.matchAll(/(install_requires|tests_require|extras_require)\s*=\s*([[{][^\]}]*[\]}])/g)) {
-    for (const s of m[2]!.matchAll(/["']([^"']+)["']/g)) out.push(s[1]!);
+  for (const s of text.matchAll(/(["'])([A-Za-z0-9][A-Za-z0-9._-]*(?:\[[\w,\s-]*\])?\s*(?:[<>=!~;@][^"'\n]*)?)\1/g)) {
+    out.push(s[2]!);
   }
   return out;
+}
+
+/** A dependency argument of setup() that is neither a literal nor a variable assigned a literal in the file. */
+function setupPyIsDynamic(text: string): boolean {
+  for (const m of text.matchAll(/\b(install_requires|extras_require|tests_require)\s*=\s*([^\s,)]+)/g)) {
+    const value = m[2]!;
+    if (/^[[{]/.test(value)) continue;
+    if (/^[A-Za-z_]\w*$/.test(value) && new RegExp(`^${value}\\s*=\\s*[[{]`, "m").test(text)) continue;
+    return true;
+  }
+  return false;
 }

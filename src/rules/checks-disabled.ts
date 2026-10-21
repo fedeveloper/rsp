@@ -1,5 +1,6 @@
 import type { DiffContext, DiffLine, FileChange, RawFinding, Rule } from "../types.js";
 import { blankStrings, JS_FILE, nonCodeLines } from "./js.js";
+import * as python from "./python.js";
 
 interface Pattern {
   /** What a project lists under `allow` in .rsp.toml to accept these findings. */
@@ -69,6 +70,7 @@ const ESLINT_CONFIG_PATTERNS: Pattern[] = [
 const CHECK_KIND: Record<string, string> = {
   pytest: "test", unittest: "test", tox: "test", nox: "test", jest: "test", vitest: "test", mocha: "test",
   ava: "test", playwright: "test", cypress: "test", "test script": "test",
+  "node --test": "test", "deno test": "test", "bun test": "test",
   ruff: "lint", flake8: "lint", pylint: "lint", eslint: "lint", oxlint: "lint", biome: "lint",
   "lint script": "lint",
   mypy: "types", pyright: "types", tsc: "types", "typecheck script": "types", "type-check script": "types",
@@ -79,7 +81,9 @@ const CHECK_KIND: Record<string, string> = {
 const CHECK_COMMAND = new RegExp(
   "\\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest" +
     "|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome)\\b" +
-    "|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b",
+    "|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b" +
+    // Built-in test runners, e.g. `node --test` or `node --import tsx --test`.
+    "|\\b(node)(?:\\s+-[^\\s&|;]+(?:\\s+[^-\\s&|;][^\\s&|;]*)?)*?\\s+--test\\b|\\b(deno|bun)\\s+test\\b",
 );
 const CHECK_COMMAND_ALL = new RegExp(CHECK_COMMAND.source, "g");
 const COVERAGE_THRESHOLD = /(?:fail_under|fail-under|--cov-fail-under)\s*[=:]?\s*["']?(\d+(?:\.\d+)?)/;
@@ -118,7 +122,7 @@ export const checksDisabled: Rule = {
     const removedSource = multiset(ctx.files.filter((f) => isSource(f.path) || isSource(f.oldPath)), "del");
     for (const file of ctx.files) {
       if (file.binary) continue;
-      if (file.path.endsWith(".py")) findings.push(...pythonFile(file, removedSource));
+      if (file.path.endsWith(".py")) findings.push(...pythonFile(ctx, file, removedSource));
       if (JS_FILE.test(file.path)) findings.push(...jsFile(ctx, file, removedSource));
       if (WORKFLOW_FILE.test(file.path)) findings.push(...workflowFile(file));
       if (TEST_CONFIG_FILE.test(file.path)) findings.push(...testConfigFile(ctx, file));
@@ -131,13 +135,15 @@ export const checksDisabled: Rule = {
   },
 };
 
-function pythonFile(file: FileChange, removed: Map<string, number>): RawFinding[] {
+function pythonFile(ctx: DiffContext, file: FileChange, removed: Map<string, number>): RawFinding[] {
   if (file.status === "deleted") {
     return PYTHON_TEST_FILE.test(file.path)
       ? [{ key: "test-file-deleted", message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }]
       : [];
   }
-  return matchAdded(file, PYTHON_PATTERNS, removed);
+  // Suppressions inside strings and docstrings are text, not directives.
+  const nonCode = python.stringLines(ctx.readHead(file.path) ?? "");
+  return matchAdded(file, PYTHON_PATTERNS, removed, (l) => (nonCode.has(l.newLine!) ? "" : python.blankStrings(l.text)));
 }
 
 function jsFile(ctx: DiffContext, file: FileChange, removed: Map<string, number>): RawFinding[] {
@@ -307,7 +313,7 @@ function isShellLine(line: string): boolean {
  * alone, so switching between `npm test` and `pnpm run test` is no change.
  */
 function checkCommands(line: string): string[] {
-  return [...line.matchAll(CHECK_COMMAND_ALL)].map((m) => m[1] ?? `${m[2]} script`);
+  return [...line.matchAll(CHECK_COMMAND_ALL)].map((m) => m[1] ?? (m[2] ? `${m[2]} script` : m[3] ? "node --test" : `${m[4]} test`));
 }
 
 function isSource(path: string): boolean {

@@ -1215,7 +1215,7 @@ function nonCodeLines(text) {
       continue;
     }
     if (state === "'" || state === '"') {
-      if (c === "\\") i++;
+      if (c === "\\" && text[i + 1] !== "\n") i++;
       else if (c === state) {
         state = "code";
         prev = "a";
@@ -1223,7 +1223,7 @@ function nonCodeLines(text) {
       continue;
     }
     if (state === "regex") {
-      if (c === "\\") i++;
+      if (c === "\\" && text[i + 1] !== "\n") i++;
       else if (c === "[") inClass = true;
       else if (c === "]") inClass = false;
       else if (c === "/" && !inClass) {
@@ -1233,7 +1233,7 @@ function nonCodeLines(text) {
       continue;
     }
     if (top === "template") {
-      if (c === "\\") i++;
+      if (c === "\\" && text[i + 1] !== "\n") i++;
       else if (c === "`") {
         stack.pop();
         prev = "a";
@@ -1327,6 +1327,140 @@ function indentation(line) {
   return line.length - line.trimStart().length;
 }
 
+// src/rules/python.ts
+var IMPORT = /^\s*import\s+(.+)$/;
+var FROM_IMPORT = /^\s*from\s+([\w.]+)\s+import\b/;
+function importedModules(line) {
+  const code2 = stripComment(line);
+  const from = FROM_IMPORT.exec(code2);
+  if (from) return from[1].startsWith(".") ? [] : [from[1].split(".")[0]];
+  const imp = IMPORT.exec(code2);
+  if (!imp) return [];
+  return imp[1].replace(/[()\\]/g, "").split(",").map((part) => part.trim().split(/\s+/)[0].split(".")[0]).filter((name) => /^[A-Za-z_]\w*$/.test(name));
+}
+function enclosingHeaders(lines, index) {
+  const headers = [];
+  let indent = indentation2(lines[index] ?? "");
+  for (let i = index - 1; i >= 0 && indent > 0; i--) {
+    const l = lines[i];
+    if (l.trim() === "" || l.trim().startsWith("#")) continue;
+    const ind = indentation2(l);
+    if (ind < indent) {
+      headers.push({ index: i, text: l.trim() });
+      indent = ind;
+    }
+  }
+  return headers;
+}
+var TYPE_CHECKING_IF = /^if\s+(?:[\w.]+\.)?TYPE_CHECKING\b/;
+function isGuardedImport(lines, index) {
+  return enclosingHeaders(lines, index).some(
+    (h) => TYPE_CHECKING_IF.test(h.text) || /^(try|except\b.*|finally)\s*:/.test(h.text) || isTryElse(lines, h)
+  );
+}
+function isTryElse(lines, header) {
+  if (!/^else\s*:/.test(header.text)) return false;
+  const indent = indentation2(lines[header.index]);
+  for (let i = header.index - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (l.trim() === "" || indentation2(l) > indent) continue;
+    return /^except\b/.test(l.trim());
+  }
+  return false;
+}
+function optionalModules(lines) {
+  const names = /* @__PURE__ */ new Set();
+  lines.forEach((line, i) => {
+    if (isGuardedImport(lines, i)) importedModules(line).forEach((m) => names.add(m));
+  });
+  return names;
+}
+var ENV_READS2 = [
+  /\b(?:os\.)?getenv\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
+  /\b(?:os\.)?environ\.get\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
+  /\b(?:os\.)?environ\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\](?!\s*=[^=])/g
+];
+function envVarReads2(line) {
+  const code2 = stripComment(line);
+  const names = [];
+  for (const re of ENV_READS2) {
+    for (const m of code2.matchAll(re)) names.push(m[1]);
+  }
+  return names;
+}
+function normalizeDist(name) {
+  return name.toLowerCase().replace(/[-_.]+/g, "-");
+}
+function indentation2(line) {
+  return line.length - line.trimStart().length;
+}
+function stripComment(line) {
+  let quote;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = void 0;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "#") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+function stringLines(text) {
+  const out = /* @__PURE__ */ new Set();
+  let line = 1;
+  let quote;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\n") {
+      line++;
+      if (quote && quote.length === 1) quote = void 0;
+      if (quote) out.add(line);
+      continue;
+    }
+    if (quote) {
+      if (c === "\\" && text[i + 1] !== "\n") i++;
+      else if (text.startsWith(quote, i)) {
+        i += quote.length - 1;
+        quote = void 0;
+      }
+    } else if (c === "#") {
+      while (i + 1 < text.length && text[i + 1] !== "\n") i++;
+    } else if (c === '"' || c === "'") {
+      quote = text.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
+      i += quote.length - 1;
+    }
+  }
+  return out;
+}
+function blankStrings2(line) {
+  let out = "";
+  let quote;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === "\\") {
+        out += "  ";
+        i++;
+      } else if (line.startsWith(quote, i)) {
+        out += quote;
+        i += quote.length - 1;
+        quote = void 0;
+      } else out += " ";
+    } else if (c === "#") {
+      return out + line.slice(i);
+    } else if (c === '"' || c === "'") {
+      quote = line.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
+      out += quote;
+      i += quote.length - 1;
+    } else out += c;
+  }
+  return out;
+}
+
 // src/rules/checks-disabled.ts
 var PYTHON_PATTERNS = [
   { id: "pytest-skip", label: "pytest skip marker", regex: /@pytest\.mark\.skip(if)?\b/ },
@@ -1387,6 +1521,9 @@ var CHECK_KIND = {
   playwright: "test",
   cypress: "test",
   "test script": "test",
+  "node --test": "test",
+  "deno test": "test",
+  "bun test": "test",
   ruff: "lint",
   flake8: "lint",
   pylint: "lint",
@@ -1404,7 +1541,7 @@ var CHECK_KIND = {
   prettier: "format"
 };
 var CHECK_COMMAND = new RegExp(
-  "\\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome)\\b|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b"
+  "\\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome)\\b|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b|\\b(node)(?:\\s+-[^\\s&|;]+(?:\\s+[^-\\s&|;][^\\s&|;]*)?)*?\\s+--test\\b|\\b(deno|bun)\\s+test\\b"
 );
 var CHECK_COMMAND_ALL = new RegExp(CHECK_COMMAND.source, "g");
 var COVERAGE_THRESHOLD = /(?:fail_under|fail-under|--cov-fail-under)\s*[=:]?\s*["']?(\d+(?:\.\d+)?)/;
@@ -1440,7 +1577,7 @@ var checksDisabled = {
     const removedSource = multiset(ctx.files.filter((f) => isSource(f.path) || isSource(f.oldPath)), "del");
     for (const file of ctx.files) {
       if (file.binary) continue;
-      if (file.path.endsWith(".py")) findings.push(...pythonFile(file, removedSource));
+      if (file.path.endsWith(".py")) findings.push(...pythonFile(ctx, file, removedSource));
       if (JS_FILE.test(file.path)) findings.push(...jsFile(ctx, file, removedSource));
       if (WORKFLOW_FILE.test(file.path)) findings.push(...workflowFile(file));
       if (TEST_CONFIG_FILE.test(file.path)) findings.push(...testConfigFile(ctx, file));
@@ -1452,11 +1589,12 @@ var checksDisabled = {
     return findings;
   }
 };
-function pythonFile(file, removed) {
+function pythonFile(ctx, file, removed) {
   if (file.status === "deleted") {
     return PYTHON_TEST_FILE.test(file.path) ? [{ key: "test-file-deleted", message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }] : [];
   }
-  return matchAdded(file, PYTHON_PATTERNS, removed);
+  const nonCode = stringLines(ctx.readHead(file.path) ?? "");
+  return matchAdded(file, PYTHON_PATTERNS, removed, (l) => nonCode.has(l.newLine) ? "" : blankStrings2(l.text));
 }
 function jsFile(ctx, file, removed) {
   if (file.status === "deleted") {
@@ -1579,7 +1717,7 @@ function isShellLine(line) {
   return !/^\s*(-\s*)?([\w-]+\s*:|[{[])/.test(line);
 }
 function checkCommands(line) {
-  return [...line.matchAll(CHECK_COMMAND_ALL)].map((m) => m[1] ?? `${m[2]} script`);
+  return [...line.matchAll(CHECK_COMMAND_ALL)].map((m) => m[1] ?? (m[2] ? `${m[2]} script` : m[3] ? "node --test" : `${m[4]} test`));
 }
 function isSource(path) {
   return path.endsWith(".py") || JS_FILE.test(path);
@@ -1720,94 +1858,12 @@ function pathAliases(text) {
   return [...body.matchAll(/"([^"]+)"\s*:\s*\[/g)].map((m) => m[1].replace(/\*$/, ""));
 }
 
-// src/rules/python.ts
-var IMPORT = /^\s*import\s+(.+)$/;
-var FROM_IMPORT = /^\s*from\s+([\w.]+)\s+import\b/;
-function importedModules(line) {
-  const code2 = stripComment(line);
-  const from = FROM_IMPORT.exec(code2);
-  if (from) return from[1].startsWith(".") ? [] : [from[1].split(".")[0]];
-  const imp = IMPORT.exec(code2);
-  if (!imp) return [];
-  return imp[1].replace(/[()\\]/g, "").split(",").map((part) => part.trim().split(/\s+/)[0].split(".")[0]).filter((name) => /^[A-Za-z_]\w*$/.test(name));
-}
-function enclosingHeaders(lines, index) {
-  const headers = [];
-  let indent = indentation2(lines[index] ?? "");
-  for (let i = index - 1; i >= 0 && indent > 0; i--) {
-    const l = lines[i];
-    if (l.trim() === "" || l.trim().startsWith("#")) continue;
-    const ind = indentation2(l);
-    if (ind < indent) {
-      headers.push({ index: i, text: l.trim() });
-      indent = ind;
-    }
-  }
-  return headers;
-}
-var TYPE_CHECKING_IF = /^if\s+(?:[\w.]+\.)?TYPE_CHECKING\b/;
-function isGuardedImport(lines, index) {
-  return enclosingHeaders(lines, index).some(
-    (h) => TYPE_CHECKING_IF.test(h.text) || /^(try|except\b.*|finally)\s*:/.test(h.text) || isTryElse(lines, h)
-  );
-}
-function isTryElse(lines, header) {
-  if (!/^else\s*:/.test(header.text)) return false;
-  const indent = indentation2(lines[header.index]);
-  for (let i = header.index - 1; i >= 0; i--) {
-    const l = lines[i];
-    if (l.trim() === "" || indentation2(l) > indent) continue;
-    return /^except\b/.test(l.trim());
-  }
-  return false;
-}
-function optionalModules(lines) {
-  const names = /* @__PURE__ */ new Set();
-  lines.forEach((line, i) => {
-    if (isGuardedImport(lines, i)) importedModules(line).forEach((m) => names.add(m));
-  });
-  return names;
-}
-var ENV_READS2 = [
-  /\b(?:os\.)?getenv\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
-  /\b(?:os\.)?environ\.get\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g,
-  /\b(?:os\.)?environ\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\](?!\s*=[^=])/g
-];
-function envVarReads2(line) {
-  const code2 = stripComment(line);
-  const names = [];
-  for (const re of ENV_READS2) {
-    for (const m of code2.matchAll(re)) names.push(m[1]);
-  }
-  return names;
-}
-function normalizeDist(name) {
-  return name.toLowerCase().replace(/[-_.]+/g, "-");
-}
-function indentation2(line) {
-  return line.length - line.trimStart().length;
-}
-function stripComment(line) {
-  let quote;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (quote) {
-      if (c === "\\") i++;
-      else if (c === quote) quote = void 0;
-    } else if (c === '"' || c === "'") {
-      quote = c;
-    } else if (c === "#") {
-      return line.slice(0, i);
-    }
-  }
-  return line;
-}
-
 // src/rules/python-manifests.ts
 var REQUIREMENTS = /(^|\/)(requirements[^/]*\.(txt|in)|requirements\/[^/]+\.(txt|in))$/;
 var REQUIREMENT_NAME = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)/;
 function declaredDependencies(ctx) {
   const manifests = [];
+  const dynamic = [];
   const names = /* @__PURE__ */ new Set();
   const add = (requirement) => {
     const m = REQUIREMENT_NAME.exec(requirement);
@@ -1819,12 +1875,16 @@ function declaredDependencies(ctx) {
     if (base === "pyproject.toml") found = fromPyproject(ctx.readHead(path) ?? "");
     else if (REQUIREMENTS.test(path)) found = fromRequirements(ctx.readHead(path) ?? "");
     else if (base === "setup.cfg") found = fromSetupCfg(ctx.readHead(path) ?? "");
-    else if (base === "setup.py") found = fromSetupPy(ctx.readHead(path) ?? "");
+    else if (base === "setup.py") {
+      const text = ctx.readHead(path) ?? "";
+      found = fromSetupPy(text);
+      if (setupPyIsDynamic(text)) dynamic.push(path);
+    }
     if (found === void 0) continue;
     manifests.push(path);
     found.forEach(add);
   }
-  return { manifests, names };
+  return { manifests, names, dynamic };
 }
 function fromPyproject(text) {
   let doc;
@@ -1891,10 +1951,19 @@ function fromSetupCfg(text) {
 }
 function fromSetupPy(text) {
   const out = [];
-  for (const m of text.matchAll(/(install_requires|tests_require|extras_require)\s*=\s*([[{][^\]}]*[\]}])/g)) {
-    for (const s of m[2].matchAll(/["']([^"']+)["']/g)) out.push(s[1]);
+  for (const s of text.matchAll(/(["'])([A-Za-z0-9][A-Za-z0-9._-]*(?:\[[\w,\s-]*\])?\s*(?:[<>=!~;@][^"'\n]*)?)\1/g)) {
+    out.push(s[2]);
   }
   return out;
+}
+function setupPyIsDynamic(text) {
+  for (const m of text.matchAll(/\b(install_requires|extras_require|tests_require)\s*=\s*([^\s,)]+)/g)) {
+    const value = m[2];
+    if (/^[[{]/.test(value)) continue;
+    if (/^[A-Za-z_]\w*$/.test(value) && new RegExp(`^${value}\\s*=\\s*[[{]`, "m").test(text)) continue;
+    return true;
+  }
+  return false;
 }
 
 // src/rules/python-stdlib.ts
@@ -2245,31 +2314,37 @@ var KNOWN_DISTRIBUTIONS = {
   telegram: ["python-telegram-bot"],
   websocket: ["websocket-client"],
   yaml: ["pyyaml"],
+  _pytest: ["pytest"],
   zmq: ["pyzmq"]
 };
 var depsUndeclared = {
   id: "deps/undeclared",
-  version: "0.2.0",
+  version: "0.3.0",
   keys: "the imported module (Python) or package (JavaScript), e.g. `boto3`",
   description: "Python and JavaScript/TypeScript imports added in the diff whose package is not declared in a dependency manifest.",
   run(ctx) {
     return [...python(ctx), ...javascript(ctx)];
   }
 };
+var PYTHON_TEST_PATH = /(^|\/)(tests?|testing)\/|(^|\/)(test_[^/]*|[^/]*_test|conftest)\.py$/;
+var TEST_RUNNERS = /* @__PURE__ */ new Set(["pytest", "_pytest"]);
 function python(ctx) {
   const pyFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && f.path.endsWith(".py"));
   if (pyFiles.length === 0) return [];
   const declared = declaredDependencies(ctx);
-  if (declared.manifests.length === 0) return [];
+  if (declared.manifests.length === 0 || declared.dynamic.length > 0) return [];
   const local = localModules(ctx.listHead());
   const where2 = declared.manifests.length <= 3 ? declared.manifests.join(", ") : `any of ${declared.manifests.length} dependency manifests`;
   const findings = [];
   for (const file of pyFiles) {
-    const optional = optionalModules((ctx.readHead(file.path) ?? "").split("\n"));
+    const text = ctx.readHead(file.path) ?? "";
+    const optional = optionalModules(text.split("\n"));
+    const inStrings = stringLines(text);
+    const runners = PYTHON_TEST_PATH.test(file.path) ? TEST_RUNNERS : /* @__PURE__ */ new Set();
     for (const l of file.lines) {
-      if (l.kind !== "add") continue;
+      if (l.kind !== "add" || inStrings.has(l.newLine)) continue;
       for (const mod of importedModules(l.text)) {
-        if (PYTHON_STDLIB.has(mod) || local.has(mod) || optional.has(mod)) continue;
+        if (PYTHON_STDLIB.has(mod) || local.has(mod) || optional.has(mod) || runners.has(mod)) continue;
         if (candidates(mod).some((c) => declared.names.has(c))) continue;
         findings.push({
           key: mod,
@@ -2425,9 +2500,11 @@ var PY_DEF = /^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/;
 var PY_CLASS = /^class\s+([A-Za-z_]\w*)\b/;
 function pythonSignatures(text) {
   const lines = text.split("\n");
+  const inStrings = stringLines(text);
   const out = [];
   let cls;
   lines.forEach((line, i) => {
+    if (inStrings.has(i + 1)) return;
     if (/^\S/.test(line) && !/^(@|#|\)|\])/.test(line)) {
       cls = PY_CLASS.exec(line)?.[1];
     }
@@ -2440,13 +2517,22 @@ function pythonSignatures(text) {
     if (!indented) cls = void 0;
     const owner = indented ? cls : void 0;
     if (owner?.startsWith("_") || name.startsWith("_") && name !== "__init__") return;
+    const decorators = decoratorsAbove(lines, i);
+    if (decorators.some((d) => /^@(\w+\.(setter|getter|deleter)|(functools\.)?(cached_)?property)\b/.test(d))) return;
     const raw = paramsFrom(lines, i, line.indexOf("(", m[0].length - 1), "#");
     if (raw === void 0) return;
     let params = splitParams(raw).map(pythonParam).filter((p) => p !== "");
     if (owner && (params[0] === "self" || params[0] === "cls")) params = params.slice(1);
-    out.push({ name: owner ? `${owner}.${name}` : name, params, shape: params.join(", "), line: i + 1 });
+    const overload = decorators.some((d) => /^@(typing\.)?overload\b/.test(d));
+    out.push({ name: owner ? `${owner}.${name}` : name, params, shape: params.join(", "), line: i + 1, overload });
   });
-  return mergeOverloads(out);
+  const lastPlain = new Map(out.filter((s) => !s.overload).map((s) => [s.name, s]));
+  return mergeOverloads(out.filter((s) => s.overload || lastPlain.get(s.name) === s).map(({ overload: _, ...s }) => s));
+}
+function decoratorsAbove(lines, index) {
+  const out = [];
+  for (let i = index - 1; i >= 0 && lines[i].trim().startsWith("@"); i--) out.push(lines[i].trim());
+  return out;
 }
 var JS_EXPORTED = [
   /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*(?:<[^(]*>)?\s*\(/,

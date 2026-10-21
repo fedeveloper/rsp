@@ -1,6 +1,7 @@
 // Public function signatures of Python and JavaScript/TypeScript files, reduced
 // to what callers depend on: parameter names, order, optionality and defaults.
 // Type annotations are left out, so adding type hints is not an interface change.
+import { stringLines } from "./python.js";
 
 export interface Signature {
   /** `name`, or `Class.name` for a method. */
@@ -19,9 +20,11 @@ const PY_CLASS = /^class\s+([A-Za-z_]\w*)\b/;
 /** Public top-level functions and methods of public top-level classes. */
 export function pythonSignatures(text: string): Signature[] {
   const lines = text.split("\n");
-  const out: Signature[] = [];
+  const inStrings = stringLines(text);
+  const out: (Signature & { overload: boolean })[] = [];
   let cls: string | undefined;
   lines.forEach((line, i) => {
+    if (inStrings.has(i + 1)) return;
     if (/^\S/.test(line) && !/^(@|#|\)|\])/.test(line)) {
       cls = PY_CLASS.exec(line)?.[1];
     }
@@ -34,14 +37,27 @@ export function pythonSignatures(text: string): Signature[] {
     if (!indented) cls = undefined;
     const owner = indented ? cls : undefined;
     if (owner?.startsWith("_") || (name.startsWith("_") && name !== "__init__")) return;
+    const decorators = decoratorsAbove(lines, i);
+    // Properties are read and assigned, never called with arguments.
+    if (decorators.some((d) => /^@(\w+\.(setter|getter|deleter)|(functools\.)?(cached_)?property)\b/.test(d))) return;
     const raw = paramsFrom(lines, i, line.indexOf("(", m[0].length - 1), "#");
     if (raw === undefined) return;
     let params = splitParams(raw).map(pythonParam).filter((p) => p !== "");
     // `self` and `cls` are supplied by Python, not by callers.
     if (owner && (params[0] === "self" || params[0] === "cls")) params = params.slice(1);
-    out.push({ name: owner ? `${owner}.${name}` : name, params, shape: params.join(", "), line: i + 1 });
+    const overload = decorators.some((d) => /^@(typing\.)?overload\b/.test(d));
+    out.push({ name: owner ? `${owner}.${name}` : name, params, shape: params.join(", "), line: i + 1, overload });
   });
-  return mergeOverloads(out);
+  // Without @overload, a later definition of the same name replaces the earlier one.
+  const lastPlain = new Map(out.filter((s) => !s.overload).map((s) => [s.name, s]));
+  return mergeOverloads(out.filter((s) => s.overload || lastPlain.get(s.name) === s).map(({ overload: _, ...s }) => s));
+}
+
+/** Decorator lines directly above line `index`, trimmed. */
+function decoratorsAbove(lines: string[], index: number): string[] {
+  const out: string[] = [];
+  for (let i = index - 1; i >= 0 && lines[i]!.trim().startsWith("@"); i--) out.push(lines[i]!.trim());
+  return out;
 }
 
 const JS_EXPORTED = [
