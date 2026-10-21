@@ -55,7 +55,7 @@ function inline(s: string): string {
         out += cell(s.slice(i, close + fence.length));
         i = close + fence.length;
       } else {
-        out += fence.replace(/`/g, "\\`");
+        out += "&#96;".repeat(fence.length);
         i += fence.length;
       }
       continue;
@@ -84,9 +84,13 @@ function escapeText(c: string): string {
   return /[\\*_[\]()#!~]/.test(c) ? `\\${c}` : c;
 }
 
-/** Inside a table, a code span still ends the cell at `|` and the row at a newline. */
+/**
+ * Inside a table, a code span still ends the cell at `|` and the row at a
+ * newline. GFM treats every `\|` in a row as an escaped pipe, even after
+ * another backslash, so backslashes need no escaping of their own.
+ */
 function cell(s: string): string {
-  return s.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
+  return s.split("|").join("\\|").replace(/[\r\n]+/g, " ");
 }
 
 function short(sha: string): string {

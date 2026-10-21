@@ -2879,7 +2879,7 @@ function inline(s) {
         out += cell(s.slice(i, close + fence.length));
         i = close + fence.length;
       } else {
-        out += fence.replace(/`/g, "\\`");
+        out += "&#96;".repeat(fence.length);
         i += fence.length;
       }
       continue;
@@ -2905,7 +2905,7 @@ function escapeText(c) {
   return /[\\*_[\]()#!~]/.test(c) ? `\\${c}` : c;
 }
 function cell(s) {
-  return s.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
+  return s.split("|").join("\\|").replace(/[\r\n]+/g, " ");
 }
 function short(sha) {
   return sha.slice(0, 12);
