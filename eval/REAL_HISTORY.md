@@ -11,7 +11,6 @@ To reproduce, clone each repository with `git clone --depth 400 <url>`, check ou
 | [httpx](https://github.com/encode/httpx) | `b5addb64f016` | 100 | 11 | 32 | 0 | 0 | 27 | 0 |
 | [fastapi](https://github.com/fastapi/fastapi) | `624ec316850e` | 100 | 12 | 13 | 0 | 0 | 5 | 0 |
 | [click](https://github.com/pallets/click) | `2247b35ea1c4` | 100 | 23 | 45 | 3 | 0 | 1 | 0 |
-| [rogue](https://github.com/fedeveloper/rogue) | `3dd88145e96a` | 35 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 ## All findings
 

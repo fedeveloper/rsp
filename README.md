@@ -367,11 +367,11 @@ The base is resolved to its merge-base with the head, exactly as GitHub computes
 Passing its own tests proves that rsp is consistent, not that its rules work on real code. Every rule change goes through four layers, and a fifth evaluation measures rsp on patches written by coding agents.
 
 1. **Golden fixtures** (`test/fixtures/<rule>/<case>/`). Each case is a `base/` tree, a `head/` tree and an `expected.json` written by hand before running the rule. The harness builds a throwaway git repository per case with fixed authors and dates, and runs **every** rule on **every** case, so a rule that fires on another rule's fixture fails too.
-2. **Labelled mutations** (`npm run eval`). Risky and benign changes are applied to three corpora; each risky change must be reported by exactly the expected rules and each benign one by none. CI fails if the results change.
+2. **Labelled mutations** (`npm run eval`). Risky and benign changes are applied to each corpus; each risky change must be reported by exactly the expected rules and each benign one by none. CI fails if the results change.
    - A small sample Python project: [eval/RESULTS.md](eval/RESULTS.md).
    - [MTGO Collection Tracker](https://github.com/fedeveloper/MTGO-Collection-Tracker), a real Node, Express and React application, at a pinned commit: [eval/RESULTS-mtgo.md](eval/RESULTS-mtgo.md).
-   - rogue, a real terminal game in plain Python without manifests, tests or CI, which checks that rules stay silent where a convention does not exist: [eval/RESULTS-rogue.md](eval/RESULTS-rogue.md). The repository is private, so this corpus runs only with `RSP_EVAL_ROGUE=1`.
-3. **Real history** (`eval/real-history.ts`). Every rule runs on about 100 recent commits of public projects, and each line-level finding is checked against git independently of the rules: the reported line holds the evidence, the line occurs more often after the commit than before, and for signatures the definition really changed. Python: flask, requests, httpx, fastapi, click, rogue ([eval/REAL_HISTORY.md](eval/REAL_HISTORY.md)). JavaScript/TypeScript: MTGO Collection Tracker, express, axios, fastify, vite, outline ([eval/REAL_HISTORY_JS.md](eval/REAL_HISTORY_JS.md)). Every false fact found this way was fixed and became a golden fixture.
+   - Corpora on private code can be added without committing them: `RSP_EVAL_EXTRA=<file>` loads one from outside the repository (see `eval/run.ts`). The maintainer uses this for a private Python game with no manifests, tests or CI, to check that rules stay silent where a convention does not exist.
+3. **Real history** (`eval/real-history.ts`). Every rule runs on about 100 recent commits of public projects, and each line-level finding is checked against git independently of the rules: the reported line holds the evidence, the line occurs more often after the commit than before, and for signatures the definition really changed. Python: flask, requests, httpx, fastapi, click ([eval/REAL_HISTORY.md](eval/REAL_HISTORY.md)). JavaScript/TypeScript: MTGO Collection Tracker, express, axios, fastify, vite, outline ([eval/REAL_HISTORY_JS.md](eval/REAL_HISTORY_JS.md)). Every false fact found this way was fixed and became a golden fixture.
 4. **Action tests** against a fake GitHub API: comment created, updated and cleared, read-only tokens, `fail-on`, invalid configuration, the test command at base and head with a flaky rerun, and one run from the committed bundle.
 
 ### Patches written by coding agents
@@ -432,7 +432,7 @@ A warning implies the change is wrong. "Added pytest skip marker" is simply true
 npm ci
 npm run typecheck
 npm test
-npm run eval      # labelled mutations; RSP_EVAL_ROGUE=1 adds the private corpus
+npm run eval      # labelled mutations; RSP_EVAL_EXTRA=<file> adds a corpus kept outside the repository
 npm run bundle    # rebuild action-dist/ after changing src/; CI checks it is up to date
 node --import tsx eval/real-history.ts --commits 100 --out eval/REAL_HISTORY.md <repo-dirs>
 node --import tsx eval/swe-bench.ts
