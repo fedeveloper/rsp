@@ -1033,7 +1033,7 @@ function buildContext(repoDir, baseRef, headRef, exclude = []) {
 import { createHash } from "node:crypto";
 
 // src/version.ts
-var VERSION = "0.3.0";
+var VERSION = "0.4.0";
 
 // src/engine.ts
 function runRules(ctx, rules, options = [], config) {
