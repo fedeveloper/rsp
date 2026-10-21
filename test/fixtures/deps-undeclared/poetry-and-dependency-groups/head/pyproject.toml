@@ -1,0 +1,12 @@
+[tool.poetry]
+name = "blog"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+Django = "^5.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest-django = "^4.8"
+
+[dependency-groups]
+test = ["hypothesis>=6"]

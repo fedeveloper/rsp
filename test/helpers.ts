@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // Fixed identity and dates make fixture commit SHAs identical on every run.
 const GIT_ENV = {
@@ -29,23 +29,36 @@ function git(dir: string, args: string[]): string {
 
 /** Builds a throwaway repo with two commits: the `base/` tree, then the `head/` tree. */
 export function makeFixtureRepo(caseDir: string): FixtureRepo {
+  return makeRepo((dir, tree) =>
+    cpSync(join(caseDir, tree), dir, { recursive: true, filter: (src) => !src.endsWith(".gitkeep") }),
+  );
+}
+
+/** Builds a throwaway repo from two in-memory trees of path to content. */
+export function makeRepoFromTrees(base: Map<string, string>, head: Map<string, string>): FixtureRepo {
+  return makeRepo((dir, tree) => {
+    for (const [path, content] of tree === "base" ? base : head) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), content);
+    }
+  });
+}
+
+function makeRepo(fill: (dir: string, tree: "base" | "head") => void): FixtureRepo {
   const dir = mkdtempSync(join(tmpdir(), "rsp-fixture-"));
   git(dir, ["init", "--quiet", "--initial-branch=main"]);
 
-  const commit = (tree: string, message: string) => {
+  const commit = (tree: "base" | "head") => {
     for (const entry of readdirSync(dir)) {
       if (entry !== ".git") rmSync(join(dir, entry), { recursive: true, force: true });
     }
-    cpSync(join(caseDir, tree), dir, {
-      recursive: true,
-      filter: (src) => !src.endsWith(".gitkeep"),
-    });
+    fill(dir, tree);
     git(dir, ["add", "--all"]);
-    git(dir, ["commit", "--quiet", "--allow-empty", "-m", message]);
+    git(dir, ["commit", "--quiet", "--allow-empty", "-m", tree]);
     return git(dir, ["rev-parse", "HEAD"]);
   };
 
-  const base = commit("base", "base");
-  const head = commit("head", "head");
+  const base = commit("base");
+  const head = commit("head");
   return { dir, base, head, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }

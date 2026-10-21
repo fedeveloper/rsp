@@ -1,0 +1,3 @@
+[
+  {"ruleId": "deps/undeclared", "path": "app.py", "line": 3, "message": "Imports `numpy`, not declared in requirements-dev.txt, requirements.txt", "evidence": "import numpy as np"}
+]

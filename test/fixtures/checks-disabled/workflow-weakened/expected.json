@@ -1,0 +1,5 @@
+[
+  {"ruleId": "checks/disabled", "path": ".github/workflows/ci.yml", "message": "Removed CI line running a check (base line 9)", "evidence": "- run: mypy app"},
+  {"ruleId": "checks/disabled", "path": ".github/workflows/ci.yml", "line": 9, "message": "Added continue-on-error: true", "evidence": "continue-on-error: true"},
+  {"ruleId": "checks/disabled", "path": ".github/workflows/ci.yml", "line": 10, "message": "Added `|| true` after a command", "evidence": "- run: pytest || true"}
+]

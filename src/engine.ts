@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import type { DiffContext, Finding, Report, Rule } from "./types.js";
 import { VERSION } from "./version.js";
 
-export function runRules(ctx: DiffContext, rules: Rule[]): Report {
+/** `options` are the CLI flags besides base, head and rule needed to reproduce a run. */
+export function runRules(ctx: DiffContext, rules: Rule[], options: string[] = []): Report {
+  const opts = options.map((o) => ` ${o}`).join("");
   const findings: Finding[] = [];
   for (const rule of rules) {
     for (const raw of rule.run(ctx)) {
@@ -13,7 +15,7 @@ export function runRules(ctx: DiffContext, rules: Rule[]): Report {
         locations: raw.locations,
         evidence: raw.evidence,
         fingerprint: "",
-        reproduce: `npx rsp check --base ${ctx.base} --head ${ctx.head} --rule ${rule.id}`,
+        reproduce: `rsp check --base ${ctx.base} --head ${ctx.head}${opts} --rule ${rule.id}`,
       });
     }
   }
@@ -24,6 +26,7 @@ export function runRules(ctx: DiffContext, rules: Rule[]): Report {
     tool: { name: "rsp", version: VERSION },
     base: ctx.base,
     head: ctx.head,
+    options,
     rules: rules.map((r) => ({ id: r.id, version: r.version })).sort((a, b) => cmp(a.id, b.id)),
     findings,
   };

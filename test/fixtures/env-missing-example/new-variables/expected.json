@@ -1,0 +1,4 @@
+[
+  {"ruleId": "env/missing-example", "path": "app/settings.py", "line": 4, "message": "Reads environment variable `STRIPE_KEY`, missing from .env.example", "evidence": "STRIPE_KEY = os.getenv(\"STRIPE_KEY\")"},
+  {"ruleId": "env/missing-example", "path": "app/settings.py", "line": 6, "message": "Reads environment variable `REDIS_URL`, missing from .env.example", "evidence": "REDIS_URL = os.environ.get(\"REDIS_URL\", \"redis://localhost\")"}
+]

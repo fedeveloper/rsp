@@ -1,0 +1,9 @@
+[project]
+name = "shop"
+dependencies = []
+
+[tool.pytest.ini_options]
+addopts = "-q"
+
+[tool.coverage.report]
+fail_under = 70

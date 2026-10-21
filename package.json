@@ -1,6 +1,6 @@
 {
   "name": "rsp",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Rule-based verifier that reports reproducible facts about risky changes in a diff.",
   "license": "Apache-2.0",
   "type": "module",
@@ -17,11 +17,18 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "rsp": "node --import tsx src/cli.ts"
+    "rsp": "node --import tsx src/cli.ts",
+    "prepare": "npm run build",
+    "bundle": "esbuild src/action-main.ts --bundle --platform=node --target=node22 --format=esm --legal-comments=eof --outfile=action-dist/index.js && node scripts/notices.mjs",
+    "eval": "node --import tsx eval/run.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "smol-toml": "^1.9.1"
   }
 }

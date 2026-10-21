@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": "pyproject.toml", "line": 6, "message": "Added pytest option that excludes tests", "evidence": "addopts = \"-q --deselect tests/test_api.py::test_timeout\""}
+]

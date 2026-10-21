@@ -18,7 +18,15 @@ export function toMarkdown(report: Report): string {
     }
   }
 
-  lines.push("", `Reproduce: \`npx rsp check --base ${report.base} --head ${report.head}\``, "");
+  const opts = report.options.map((o) => ` ${o}`).join("");
+  lines.push(
+    "",
+    `Reproduce: \`rsp check --base ${report.base} --head ${report.head}${opts}\``,
+    "",
+    `<sub>Install: \`npm install -g github:fedeveloper/rsp#v${report.tool.version}\`. ` +
+      "Findings are facts about the diff, not a review: no findings does not mean the change is correct.</sub>",
+    "",
+  );
   return lines.join("\n");
 }
 

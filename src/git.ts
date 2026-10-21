@@ -40,3 +40,10 @@ export function readAt(repoDir: string, commit: string, path: string): string | 
     return undefined;
   }
 }
+
+export function listFiles(repoDir: string, commit: string): string[] {
+  return git(repoDir, ["ls-tree", "-r", "-z", "--name-only", commit])
+    .split("\0")
+    .filter((p) => p.length > 0)
+    .sort();
+}

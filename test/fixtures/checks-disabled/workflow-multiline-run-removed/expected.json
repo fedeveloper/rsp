@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": ".github/workflows/tests.yml", "message": "Removed CI line running a check (base line 15)", "evidence": "tox run -e ${{ matrix.tox || format('py{0}', matrix.python) }}"}
+]

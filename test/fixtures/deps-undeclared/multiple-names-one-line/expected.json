@@ -1,0 +1,3 @@
+[
+  {"ruleId": "deps/undeclared", "path": "app/client.py", "line": 1, "message": "Imports `httpx`, not declared in pyproject.toml", "evidence": "import requests, httpx as hx  # http clients"}
+]
