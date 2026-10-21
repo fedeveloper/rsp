@@ -51,3 +51,19 @@ it("exits 2 on usage errors and unknown rules", () => {
   assert.equal(res.status, 2);
   assert.match(res.stderr, /Unknown rule: nope/);
 });
+
+it("accepts --exclude, so the reproduce command of an excluding run works", () => {
+  const repo = makeFixtureRepo(join(ROOT, "test/fixtures/checks-disabled/js-suppressions-added"));
+  try {
+    const base = ["check", "--repo", repo.dir, "--base", repo.base, "--head", repo.head, "--format", "json"];
+    const all = JSON.parse(rsp(base).stdout);
+    assert.ok(all.findings.length > 0);
+    const res = rsp([...base, "--exclude", "src/**"]);
+    assert.equal(res.status, 0, res.stderr);
+    const report = JSON.parse(res.stdout);
+    assert.deepEqual(report.findings, []);
+    assert.deepEqual(report.options, ["--exclude 'src/**'"]);
+  } finally {
+    repo.cleanup();
+  }
+});

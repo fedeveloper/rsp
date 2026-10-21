@@ -15,6 +15,7 @@ Options:
   --repo <dir>      Repository directory (default: current directory)
   --format <fmt>    json or markdown (default: markdown)
   --rule <id>       Run only this rule; repeatable
+  --exclude <glob>  Ignore changed files matching this glob; repeatable
   --list-rules      Print the available rules and exit
   --version         Print the version and exit
   --help            Print this help and exit
@@ -30,6 +31,7 @@ function main(argv: string[]): number {
       repo: { type: "string", default: process.cwd() },
       format: { type: "string", default: "markdown" },
       rule: { type: "string", multiple: true },
+      exclude: { type: "string", multiple: true },
       "list-rules": { type: "boolean", default: false },
       version: { type: "boolean", default: false },
       help: { type: "boolean", default: false },
@@ -57,7 +59,7 @@ function main(argv: string[]): number {
     return 2;
   }
 
-  const report = check({ repoDir: values.repo, base: values.base, head: values.head, rules: values.rule });
+  const report = check({ repoDir: values.repo, base: values.base, head: values.head, rules: values.rule, exclude: values.exclude });
   process.stdout.write(values.format === "json" ? toJson(report) : toMarkdown(report));
   // Advisory by default: findings never change the exit code yet.
   return 0;
