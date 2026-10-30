@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest">
+  <testcase classname="tests.test_calc" name="test_add" time="0"><skipped type="pytest.skip" message="todo">skipped</skipped></testcase>
+  <testcase classname="tests.test_calc" name="test_neg" time="0.001" />
+</testsuite></testsuites>

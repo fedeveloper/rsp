@@ -1,0 +1,3 @@
+[
+  {"ruleId": "tests/delta", "path": "test/fixtures/tests-delta/skipped-at-head/reports/junit-head.xml", "message": "Test `tests.test_calc::test_add` is skipped at head and ran at base", "evidence": "tests.test_calc::test_add: passed -> skipped"}
+]

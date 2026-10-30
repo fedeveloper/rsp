@@ -20,6 +20,12 @@ it("keeps VERSION in sync with package.json", () => {
   assert.equal(VERSION, pkg.version);
 });
 
+it("has a CHANGELOG section for the current version", () => {
+  const changelog = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
+  assert.match(changelog, new RegExp(`^## \\[${VERSION.replace(/\./g, "\\.")}\\] - \\d{4}-\\d{2}-\\d{2}$`, "m"));
+  assert.match(changelog, new RegExp(`^\\[${VERSION.replace(/\./g, "\\.")}\\]: https://github\\.com/fedeveloper/rsp/`, "m"));
+});
+
 it("prints a markdown report and exits 0 even with findings", () => {
   const repo = makeFixtureRepo(join(ROOT, "test/fixtures/checks-disabled/skip-marker-added"));
   try {

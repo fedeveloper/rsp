@@ -1,0 +1,3 @@
+[
+  {"ruleId": "tests/delta", "path": "test/fixtures/tests-delta/no-tests-at-head/reports/junit-head.xml", "message": "No test results at head; 2 at base", "evidence": "tests: 2 -> 0"}
+]
