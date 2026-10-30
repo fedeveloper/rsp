@@ -1,0 +1,4 @@
+[
+  {"ruleId": "interface/route-removed", "path": "app.py", "message": "Removed route `DELETE /items/<int:item_id>`; no file declares it at head", "evidence": "@app.route(\"/items/<int:item_id>\", methods=[\"GET\", \"DELETE\"])"},
+  {"ruleId": "interface/route-removed", "path": "app.py", "message": "Removed route `GET /health`; no file declares it at head", "evidence": "@app.get(\"/health\")"}
+]

@@ -1,0 +1,3 @@
+[
+  {"ruleId": "interface/removed-still-used", "path": "use.py", "line": 4, "message": "Imports `fetch` from `src/svc/api.py`, which no longer defines it", "evidence": "from svc.api import fetch"}
+]

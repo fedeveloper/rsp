@@ -1,0 +1,5 @@
+[
+  {"ruleId": "interface/removed-still-used", "path": "src/report.ts", "line": 1, "message": "Imports `default` from `src/store.ts`, which no longer defines it", "evidence": "import format, { type Item, totalQuantity } from \"./store.js\";"},
+  {"ruleId": "interface/removed-still-used", "path": "src/report.ts", "line": 1, "message": "Imports `totalQuantity` from `src/store.ts`, which no longer defines it", "evidence": "import format, { type Item, totalQuantity } from \"./store.js\";"},
+  {"ruleId": "interface/removed-still-used", "path": "src/views/summary.ts", "line": 3, "message": "Imports `totalQuantity` from `src/store.ts`, which no longer defines it", "evidence": "totalQuantity,"}
+]

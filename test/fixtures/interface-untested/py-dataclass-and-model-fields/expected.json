@@ -1,0 +1,4 @@
+[
+  {"ruleId": "interface/untested-change", "path": "app/models.py", "line": 8, "message": "Parameters of `Settings.__init__`: added `retries=3`; changed `timeout=10` to `timeout=30`; no test changed by the diff mentions it", "evidence": "class Settings:"},
+  {"ruleId": "interface/untested-change", "path": "app/models.py", "line": 15, "message": "Parameters of `Order.__init__`: added `note=\"\"`; no test changed by the diff mentions it", "evidence": "class Order(BaseModel):"}
+]

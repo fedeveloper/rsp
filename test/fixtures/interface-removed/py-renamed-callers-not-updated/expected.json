@@ -1,0 +1,5 @@
+[
+  {"ruleId": "interface/removed-still-used", "path": "app/cli.py", "line": 1, "message": "Imports `load_settings` from `app/config.py`, which no longer defines it", "evidence": "from app.config import load_settings"},
+  {"ruleId": "interface/removed-still-used", "path": "app/jobs.py", "line": 3, "message": "Imports `load_settings` from `app/config.py`, which no longer defines it", "evidence": "load_settings,"},
+  {"ruleId": "interface/removed-still-used", "path": "app/sub/worker.py", "line": 1, "message": "Imports `load_settings` from `app/config.py`, which no longer defines it", "evidence": "from ..config import load_settings as settings"}
+]

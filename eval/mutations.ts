@@ -16,6 +16,8 @@ export const DEP = "deps/undeclared";
 export const ENV = "env/missing-example";
 export const IF = "interface/untested-change";
 export const LOCK = "deps/lockfile";
+export const REM = "interface/removed-still-used";
+export const ROUTE = "interface/route-removed";
 
 /** Replaces exactly one occurrence, so a mutation fails loudly if the project drifts. */
 export function replace(files: Files, path: string, from: string, to: string): void {
@@ -98,6 +100,16 @@ export const MUTATIONS: Mutation[] = [
     replace(f, "inventory/store.py", "quantity=item.quantity - quantity)", "quantity=item.quantity - amount)");
   }),
 
+  risky("return-type-changed", [IF], "Return a list of prices instead of a mapping from fetch_prices", (f) =>
+    replace(f, "inventory/client.py", "def fetch_prices(skus: list[str]) -> dict[str, float]:", "def fetch_prices(skus: list[str]) -> list[float]:")),
+  benign("return-type-respelled", "Spell the return type of fetch_prices with typing.Dict", (f) =>
+    replace(f, "inventory/client.py", "def fetch_prices(skus: list[str]) -> dict[str, float]:", "def fetch_prices(skus: list[str]) -> typing.Dict[str, float]:")),
+  risky("function-renamed-callers-left", [REM], "Rename load_settings without updating the modules that import it", (f) =>
+    replace(f, "inventory/config.py", "def load_settings", "def read_settings")),
+  risky("class-removed-still-imported", [REM], "Remove the Store class that tests import", (f) => {
+    const store = f.get("inventory/store.py")!;
+    f.set("inventory/store.py", store.slice(0, store.indexOf("class Store")).trimEnd() + "\n");
+  }),
   benign("rename-function", "Rename a function and its callers", (f) => {
     replace(f, "inventory/config.py", "def load_settings", "def read_settings");
     replace(f, "inventory/client.py", "from inventory.config import load_settings", "from inventory.config import read_settings");

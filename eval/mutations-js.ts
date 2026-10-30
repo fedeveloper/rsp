@@ -1,6 +1,6 @@
 // Labelled changes applied to eval/project-js, a small Express service in
 // TypeScript. Same conventions as eval/mutations.ts.
-import { benign, CD, DEP, ENV, IF, LOCK, type Mutation, replace, risky } from "./mutations.js";
+import { benign, CD, DEP, ENV, IF, LOCK, type Mutation, REM, replace, risky, ROUTE } from "./mutations.js";
 
 export const MUTATIONS_JS: Mutation[] = [
   risky("it-skip", [CD], "Skip a failing test with it.skip", (f) =>
@@ -47,6 +47,31 @@ export const MUTATIONS_JS: Mutation[] = [
   risky("param-added-untested", [IF], "Add a parameter to an exported function without touching tests", (f) =>
     replace(f, "src/prices.ts", 'export async function fetchPrice(sku: string, currency = "EUR")', 'export async function fetchPrice(sku: string, currency = "EUR", timeoutMs = 5000)')),
 
+  risky("export-renamed-callers-left", [REM], "Rename totalQuantity without updating the test that imports it", (f) =>
+    replace(f, "src/store.ts", "export function totalQuantity(", "export function sumQuantities(")),
+  risky("export-removed-still-imported", [REM], "Remove the export of fetchPrice that the server imports", (f) =>
+    replace(f, "src/prices.ts", "export async function fetchPrice(", "async function lookupPrice(")),
+  benign("export-renamed-everywhere", "Rename totalQuantity and the test that uses it", (f) => {
+    replace(f, "src/store.ts", "export function totalQuantity(", "export function sumQuantities(");
+    replace(f, "test/store.test.ts", 'import { Store, totalQuantity } from "../src/store.js";', 'import { Store, sumQuantities } from "../src/store.js";');
+    replace(f, "test/store.test.ts", "    expect(totalQuantity(", "    expect(sumQuantities(");
+  }),
+  risky("type-field-required", [IF], "Add a required field to the exported Item type", (f) =>
+    replace(f, "src/store.ts", "  quantity: number;\n}", "  quantity: number;\n  warehouse: string;\n}")),
+  benign("type-field-optional", "Add an optional field to the exported Item type", (f) =>
+    replace(f, "src/store.ts", "  quantity: number;\n}", "  quantity: number;\n  note?: string;\n}")),
+  risky("route-removed", [ROUTE], "Remove the DELETE /items/:sku route", (f) =>
+    replace(f, "src/server.ts", '  app.delete("/items/:sku", (req, res) => {\n    const quantity = Number(req.query.quantity ?? 1);\n    res.json(store.remove(req.params.sku, quantity));\n  });\n\n', "")),
+  risky("route-method-changed", [ROUTE], "Serve the price lookup with POST instead of GET", (f) =>
+    replace(f, "src/server.ts", 'app.get("/items/:sku/price"', 'app.post("/items/:sku/price"')),
+  benign("route-param-renamed", "Rename the parameter of a route", (f) => {
+    replace(f, "src/server.ts", 'app.get("/items/:sku/price", async (req, res) => {\n    res.json({ price: await fetchPrice(req.params.sku) });', 'app.get("/items/:code/price", async (req, res) => {\n    res.json({ price: await fetchPrice(req.params.code) });');
+  }),
+  benign("route-moved-to-router", "Move the price route to its own module", (f) => {
+    replace(f, "src/server.ts", '  app.get("/items/:sku/price", async (req, res) => {\n    res.json({ price: await fetchPrice(req.params.sku) });\n  });\n\n', "  app.use(priceRoutes());\n\n");
+    replace(f, "src/server.ts", 'import { fetchPrice } from "./prices.js";\n', 'import { priceRoutes } from "./routes/prices.js";\n');
+    f.set("src/routes/prices.ts", 'import express from "express";\nimport { fetchPrice } from "../prices.js";\n\nexport function priceRoutes() {\n  const router = express.Router();\n  router.get("/items/:sku/price", async (req, res) => {\n    res.json({ price: await fetchPrice(req.params.sku) });\n  });\n  return router;\n}\n');
+  }),
   benign("dependency-declared", "Add pino to package.json and the lockfile and import it", (f) => {
     replace(f, "package.json", '    "express": "^5.1.0",\n', '    "express": "^5.1.0",\n    "pino": "^9.7.0",\n');
     replace(f, "package-lock.json", '        "express": "^5.1.0",\n', '        "express": "^5.1.0",\n        "pino": "^9.7.0",\n');

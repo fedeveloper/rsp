@@ -1,0 +1,6 @@
+[
+  {"ruleId": "interface/untested-change", "path": "src/api.py", "line": 4, "message": "Return type of `load`: changed `dict` to `list`; no test changed by the diff mentions it", "evidence": "def load(path: str) -> list:"},
+  {"ruleId": "interface/untested-change", "path": "src/api.py", "line": 20, "message": "Parameters of `count`: added `start`; return type changed `int` to `float`; no test changed by the diff mentions it", "evidence": "def count(items: list, start: int) -> float:"},
+  {"ruleId": "interface/untested-change", "path": "src/client.ts", "line": 1, "message": "Return type of `fetchUser`: changed `Promise<User>` to `Promise<User | null>`; no test changed by the diff mentions it", "evidence": "export function fetchUser(id: string): Promise<User | null> {"},
+  {"ruleId": "interface/untested-change", "path": "src/client.ts", "line": 8, "message": "Return type of `Client.close`: changed `void` to `Promise<void>`; no test changed by the diff mentions it", "evidence": "close(): Promise<void> {"}
+]

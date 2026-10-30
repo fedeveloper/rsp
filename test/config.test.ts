@@ -44,7 +44,7 @@ it("records the configuration in the report, and --no-config ignores it", () => 
   try {
     const configured = check({ repoDir: repo.dir, base: repo.base, head: repo.head });
     assert.equal(configured.config, ".rsp.toml");
-    assert.deepEqual(configured.rules.map((r) => r.id), ["checks/disabled", "deps/lockfile", "deps/undeclared", "interface/untested-change", "tests/delta"]);
+    assert.deepEqual(configured.rules.map((r) => r.id), ["checks/disabled", "deps/lockfile", "deps/undeclared", "interface/removed-still-used", "interface/route-removed", "interface/untested-change", "tests/delta"]);
     assert.match(toMarkdown(configured), /Configuration: `\.rsp\.toml` from the base commit\./);
 
     const plain = check({ repoDir: repo.dir, base: repo.base, head: repo.head, config: false });

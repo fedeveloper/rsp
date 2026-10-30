@@ -1,0 +1,3 @@
+[
+  {"ruleId": "interface/untested-change", "path": "src/config.ts", "line": 1, "message": "Fields of `Settings`: removed `port`; added required `timeout`; made `retries` required; no test changed by the diff mentions it", "evidence": "export interface Settings {"}
+]

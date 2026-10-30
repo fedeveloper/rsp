@@ -11,6 +11,9 @@ The section of a version is the body of its GitHub Release.
 - New rule `deps/lockfile` 0.1.0: dependencies added, changed or removed in `package.json`, `pyproject.toml` or `Pipfile` that the lockfile next to them does not match (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`).
 - `deps/undeclared` 0.4.0 reads more Python manifests: files included from requirements files with `-r` or `-c` whatever their name, `Pipfile`, and conda `environment.yml`. More manifests can only remove findings.
 - The sample Python project in the evaluation has a `uv.lock`; both sample projects have lockfile mutations.
+- New rule `interface/removed-still-used` 0.1.0: top-level Python names and JavaScript/TypeScript exports that the diff removes while another file still imports them.
+- New rule `interface/route-removed` 0.1.0: HTTP routes with a literal path (Flask, FastAPI, Django, Express, Fastify and similar routers) removed or given another method, and declared by no file at head.
+- `interface/untested-change` 0.2.0 also compares the constructors of dataclasses, attrs classes and Pydantic models, constructors and public methods of exported TypeScript classes, fields of exported TypeScript interfaces and object types (removed, added as required, made required), and return annotations. Keys can now be type names.
 
 - `CHANGELOG.md`, and a test that keeps it in step with the version in `package.json`.
 - Release workflow: pushing a tag `vX.Y.Z` on `main` creates the GitHub Release from this file and moves the major tag `v0` to the same commit.
