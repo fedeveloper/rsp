@@ -19,6 +19,16 @@ export function toMarkdown(report: Report): string {
     }
   }
 
+  const flaky = report.tests?.flaky ?? [];
+  if (flaky.length > 0) {
+    const shown = flaky.slice(0, 20).map((id) => cell(codeSpan(id))).join(", ");
+    const more = flaky.length > 20 ? ` and ${flaky.length - 20} more` : "";
+    lines.push("", `Failed and also passed at head, not counted as failures: ${shown}${more}.`);
+  }
+  for (const file of report.tests?.incomplete ?? []) {
+    lines.push("", `The head report ${codeSpan(file)} is cut off, so tests missing from it are not reported.`);
+  }
+
   const opts = report.options.map((o) => ` ${o}`).join("");
   if (report.config) lines.push("", `Configuration: ${codeSpan(report.config)} from the base commit.`);
   lines.push(

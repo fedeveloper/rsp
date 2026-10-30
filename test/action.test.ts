@@ -109,7 +109,7 @@ it("clears an earlier comment once the findings are gone", async () => {
     const api = fakeApi([{ id: 42, body: `${COMMENT_MARKER}\nold report`, user: BOT }]);
     assert.equal(await runAction(s.env, api.fetchImpl), 0);
     assert.equal(api.calls[1]!.method, "PATCH");
-    assert.match(api.calls[1]!.body!.body, /None of the 8 rules found facts in this diff/);
+    assert.match(api.calls[1]!.body!.body, /None of the 9 rules found facts in this diff/);
   } finally {
     s.cleanup();
   }
@@ -233,6 +233,22 @@ it("reruns the tests at head to clear a flaky failure", async () => {
     assert.equal(result, 0);
     assert.match(s.read("output.txt"), /^findings=0\n/);
     assert.match(logs, /rerun 1/);
+  } finally {
+    s.cleanup();
+  }
+});
+
+it("collects coverage reports at head and lists flaky tests in the summary", async () => {
+  const repo = makeRepoFromTrees(new Map([["state.txt", "ok\n"]]), new Map([["state.txt", "fail\n"]]));
+  const mark = join(mkdtempSync(join(tmpdir(), "rsp-flaky-")), "failed-once");
+  const lcov = `printf 'SF:%s/state.txt\\nDA:1,0\\nend_of_record\\n' "$PWD" > lcov.info`;
+  const s = setup(repo, { "test-command": `${junitCommand(mark)}; ${lcov}`, coverage: "lcov.info" });
+  try {
+    const { result } = await quietly(() => runAction(s.env, fakeApi([]).fetchImpl));
+    assert.equal(result, 0);
+    const summary = s.read("summary.md");
+    assert.match(summary, /1 of the 1 added line of `state\.txt` that the coverage report measures did not run in the tests at head/);
+    assert.match(summary, /Failed and also passed at head, not counted as failures: `t::a`\./);
   } finally {
     s.cleanup();
   }

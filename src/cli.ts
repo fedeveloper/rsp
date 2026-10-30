@@ -19,6 +19,7 @@ Options:
   --no-config       Ignore .rsp.toml in the base commit
   --junit-base <f>  JUnit report of the tests run at base; repeatable
   --junit-head <f>  JUnit report of the tests run at head; repeatable
+  --coverage <f>    LCOV or Cobertura coverage report of the tests at head; repeatable
   --list-rules      Print the available rules and exit
   --version         Print the version and exit
   --help            Print this help and exit
@@ -38,6 +39,7 @@ function main(argv: string[]): number {
       "no-config": { type: "boolean", default: false },
       "junit-base": { type: "string", multiple: true },
       "junit-head": { type: "string", multiple: true },
+      coverage: { type: "string", multiple: true },
       "list-rules": { type: "boolean", default: false },
       version: { type: "boolean", default: false },
       help: { type: "boolean", default: false },
@@ -77,6 +79,7 @@ function main(argv: string[]): number {
     config: !values["no-config"],
     junitBase: values["junit-base"],
     junitHead: values["junit-head"],
+    coverage: values.coverage,
   });
   process.stdout.write(values.format === "json" ? toJson(report) : toMarkdown(report));
   // Advisory by default: findings never change the exit code yet.

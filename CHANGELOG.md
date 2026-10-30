@@ -15,6 +15,9 @@ The section of a version is the body of its GitHub Release.
 - New rule `interface/route-removed` 0.1.0: HTTP routes with a literal path (Flask, FastAPI, Django, Express, Fastify and similar routers) removed or given another method, and declared by no file at head.
 - `interface/untested-change` 0.2.0 also compares the constructors of dataclasses, attrs classes and Pydantic models, constructors and public methods of exported TypeScript classes, fields of exported TypeScript interfaces and object types (removed, added as required, made required), and return annotations. Keys can now be type names.
 
+- New rule `tests/uncovered-change` 0.1.0: added lines that the coverage report of the tests at head (LCOV or Cobertura) measures and that did not run, one fact per file. It runs only with `--coverage` or the Action's `coverage` input.
+- `tests/delta` 0.2.0: tests that failed and also passed at head, on a rerun or through the runner's own retries (pytest-rerunfailures, Maven Surefire), are listed in the report under `tests.flaky` and below the table, not as findings. A head report cut off while it was written is listed under `tests.incomplete`, and missing tests are then not reported. JUnit reports with a byte order mark are read.
+
 - `CHANGELOG.md`, and a test that keeps it in step with the version in `package.json`.
 - Release workflow: pushing a tag `vX.Y.Z` on `main` creates the GitHub Release from this file and moves the major tag `v0` to the same commit.
 - End-to-end tests of the Action on this repository's own pull requests: the Action run from `action.yml`, its report compared with the CLI, and the environment of `test-command` checked on a real runner.

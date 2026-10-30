@@ -1,0 +1,17 @@
+TN:
+SF:/home/runner/work/svc/svc/src/a.ts
+FN:3,twice
+FNDA:0,twice
+DA:1,1
+DA:3,1
+DA:4,0
+LF:3
+LH:2
+end_of_record
+TN:
+SF:src/b.ts
+DA:1,1
+DA:2,0
+DA:3,0
+DA:4,1
+end_of_record

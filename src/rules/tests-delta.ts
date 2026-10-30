@@ -3,11 +3,12 @@ import { codeSpan } from "../text.js";
 
 export const testsDelta: Rule = {
   id: "tests/delta",
-  version: "0.1.0",
+  version: "0.2.0",
   keys: "the test id, `classname::name` as in the JUnit report, or `no-tests`",
   description:
     "Differences between the test results at base and at head, read from JUnit reports: tests that pass at base " +
-    "and fail at head, tests that ran at base and are skipped or missing at head. Runs only when reports are given.",
+    "and fail at head, tests that ran at base and are skipped or missing at head. Runs only when reports are given. " +
+    "Missing tests are not reported when a head report is cut off.",
   run(ctx) {
     if (!ctx.tests) return [];
     const { base, head } = ctx.tests;
@@ -20,7 +21,9 @@ export const testsDelta: Rule = {
       evidence,
     });
 
-    if (head.results.size === 0 && base.results.size > 0) {
+    // A report cut off while it was written lacks tests that did run; what is absent from it is unknown.
+    const partial = head.incomplete.length > 0;
+    if (head.results.size === 0 && base.results.size > 0 && !partial) {
       return [finding("no-tests", `No test results at head; ${base.results.size} at base`, `tests: ${base.results.size} -> 0`)];
     }
     const findings: RawFinding[] = [];
@@ -33,7 +36,7 @@ export const testsDelta: Rule = {
       }
     }
     // Renamed or moved tests leave the total unchanged; only a smaller suite has lost tests.
-    if (head.results.size < base.results.size) {
+    if (head.results.size < base.results.size && !partial) {
       for (const [id, before] of base.results) {
         if (head.results.has(id)) continue;
         findings.push(

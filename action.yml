@@ -27,6 +27,12 @@ inputs:
   junit:
     description: Glob, relative to the repository root, of the JUnit files the test command writes.
     default: "**/junit*.xml"
+  coverage:
+    description: >-
+      Glob, relative to the repository root, of the LCOV or Cobertura coverage reports the test command writes at
+      head, such as "coverage/lcov.info" or "coverage.xml". When set, the tests/uncovered-change rule reports added
+      lines that did not run. Empty (default) turns it off.
+    default: ""
   test-retries:
     description: Extra runs at head while tests fail there but passed at base, to clear flaky failures.
     default: "1"

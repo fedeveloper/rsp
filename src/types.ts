@@ -36,6 +36,8 @@ export interface DiffContext {
   listHead(): string[];
   /** Test results at base and head, when JUnit reports were given. */
   tests?: { base: TestRun; head: TestRun };
+  /** Hits by line of each tracked file in the coverage reports of the tests at head, when given. */
+  coverage?: Map<string, Map<number, number>>;
 }
 
 export interface Location {
@@ -86,4 +88,14 @@ export interface Report {
   config: string | null;
   rules: { id: string; version: string }[];
   findings: Finding[];
+  /**
+   * Notes on the head test run, when JUnit reports were given: they are about
+   * the run, not the diff, so they are not findings.
+   */
+  tests?: {
+    /** Tests that failed and also passed at head, such as on a rerun. */
+    flaky: string[];
+    /** Head reports that were cut off, so missing tests are not reported. */
+    incomplete: string[];
+  };
 }

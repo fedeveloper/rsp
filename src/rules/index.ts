@@ -7,5 +7,6 @@ import { interfaceRemoved } from "./interface-removed.js";
 import { interfaceRoutes } from "./interface-routes.js";
 import { interfaceUntested } from "./interface-untested.js";
 import { testsDelta } from "./tests-delta.js";
+import { testsUncovered } from "./tests-uncovered.js";
 
-export const ALL_RULES: Rule[] = [checksDisabled, depsLockfile, depsUndeclared, envMissingExample, interfaceRemoved, interfaceRoutes, interfaceUntested, testsDelta];
+export const ALL_RULES: Rule[] = [checksDisabled, depsLockfile, depsUndeclared, envMissingExample, interfaceRemoved, interfaceRoutes, interfaceUntested, testsDelta, testsUncovered];

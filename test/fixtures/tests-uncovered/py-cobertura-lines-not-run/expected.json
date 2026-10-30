@@ -1,0 +1,3 @@
+[
+  {"ruleId": "tests/uncovered-change", "path": "src/billing.py", "line": 7, "message": "1 of the 4 added lines of `src/billing.py` that the coverage report measures did not run in the tests at head", "evidence": "raise ValueError(\"negative\")"}
+]

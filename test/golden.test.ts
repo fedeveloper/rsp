@@ -16,16 +16,16 @@ interface Expected {
 const FIXTURES = join(import.meta.dirname, "fixtures");
 
 /**
- * Test reports a case carries in `reports/`: `junit-base*.xml` and
- * `junit-head*.xml`, in name order. Paths are relative to the working
+ * Test reports a case carries in `reports/`: `junit-base*.xml`,
+ * `junit-head*.xml` and coverage reports `coverage*`, in name order. Paths are relative to the working
  * directory, so that findings that point at a report are the same everywhere.
  */
-function reports(caseDir: string): { junitBase?: string[]; junitHead?: string[] } {
+function reports(caseDir: string): { junitBase?: string[]; junitHead?: string[]; coverage?: string[] } {
   const dir = join(caseDir, "reports");
   if (!existsSync(dir)) return {};
   const files = readdirSync(dir).sort();
   const pick = (prefix: string) => files.filter((f) => f.startsWith(prefix)).map((f) => relative(process.cwd(), join(dir, f)));
-  return { junitBase: pick("junit-base"), junitHead: pick("junit-head") };
+  return { junitBase: pick("junit-base"), junitHead: pick("junit-head"), coverage: pick("coverage") };
 }
 
 // Every case runs all rules, so a rule that fires on another rule's fixture fails too.
