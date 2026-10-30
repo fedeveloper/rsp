@@ -52,7 +52,7 @@ export const interfaceRemoved: Rule = {
 
 /** Whether `name` occurs as a word anywhere in the text: then it may still be defined, re-exported or assigned. */
 function mentions(text: string, name: string): boolean {
-  return new RegExp(`(^|[^\\w$])${name.replace(/\$/g, "\\$")}($|[^\\w$])`).test(text);
+  return new RegExp(`(^|[^\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\w$])`).test(text);
 }
 
 /**

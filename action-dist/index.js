@@ -2918,7 +2918,7 @@ var interfaceRemoved = {
   }
 };
 function mentions(text, name) {
-  return new RegExp(`(^|[^\\w$])${name.replace(/\$/g, "\\$")}($|[^\\w$])`).test(text);
+  return new RegExp(`(^|[^\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\w$])`).test(text);
 }
 function removedPython(ctx, file) {
   const before = ctx.readBase(file.oldPath) ?? "";
