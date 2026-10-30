@@ -21,9 +21,9 @@ it("keeps VERSION in sync with package.json", () => {
 });
 
 it("has a CHANGELOG section for the current version", () => {
-  const changelog = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
-  assert.match(changelog, new RegExp(`^## \\[${VERSION.replace(/\./g, "\\.")}\\] - \\d{4}-\\d{2}-\\d{2}$`, "m"));
-  assert.match(changelog, new RegExp(`^\\[${VERSION.replace(/\./g, "\\.")}\\]: https://github\\.com/fedeveloper/rsp/`, "m"));
+  const lines = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8").split("\n");
+  assert.ok(lines.some((l) => l.startsWith(`## [${VERSION}] - `) && /^\d{4}-\d{2}-\d{2}$/.test(l.slice(`## [${VERSION}] - `.length))));
+  assert.ok(lines.some((l) => l.startsWith(`[${VERSION}]: https://github.com/fedeveloper/rsp/`)));
 });
 
 it("prints a markdown report and exits 0 even with findings", () => {

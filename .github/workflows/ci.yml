@@ -61,6 +61,8 @@ jobs:
         id: rsp
         with:
           comment: false
+          # Only the report of this run, not the JUnit files kept as test fixtures.
+          junit: junit.xml
           exclude: |
             test/fixtures/**
             eval/project/**
