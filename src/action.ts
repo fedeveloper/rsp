@@ -38,7 +38,7 @@ export async function runAction(env: Env = process.env, fetchImpl: Fetch = fetch
     log(`::error::test-retries must be a whole number, got "${input("test-retries")}"`);
     return 1;
   }
-  let junit: { junitBase: string[]; junitHead: string[] } | undefined;
+  let junit: { junitBase: string[]; junitHead: string[]; coverage: string[] } | undefined;
   if (input("test-command") && env.GITHUB_EVENT_NAME === "pull_request_target") {
     // pull_request_target runs with a write token and secrets; the test command would run the pull request's code with them.
     log("::error::test-command runs the pull request's code and is refused on pull_request_target; use the pull_request event.");
@@ -58,6 +58,7 @@ export async function runAction(env: Env = process.env, fetchImpl: Fetch = fetch
         head: pr.head.sha,
         command: input("test-command"),
         junit: input("junit") || "**/junit*.xml",
+        coverage: input("coverage") || undefined,
         retries,
         workDir: env.RUNNER_TEMP ?? process.cwd(),
         log,

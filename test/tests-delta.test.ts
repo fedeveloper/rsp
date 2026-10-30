@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
-import { check } from "../src/index.js";
-import { mergeRuns, parseJUnit } from "../src/junit.js";
+import { check, toMarkdown } from "../src/index.js";
+import { mergeRuns, parseJUnit, parseReport } from "../src/junit.js";
 import { makeFixtureRepo } from "./helpers.js";
 
 // As written by pytest --junitxml.
@@ -123,5 +123,56 @@ it("needs reports for both commits", () => {
     );
   } finally {
     repo.cleanup();
+  }
+});
+
+it("records tests that failed and also passed, from reruns or from the runner's own retries", () => {
+  const fail = '<testcase classname="a" name="t"><failure/></testcase>';
+  const pass = '<testcase classname="a" name="t"/>';
+  assert.deepEqual(mergeRuns([{ path: "1", xml: fail }, { path: "2", xml: pass }]).flaky, ["a::t"]);
+  assert.deepEqual(mergeRuns([{ path: "1", xml: fail }, { path: "2", xml: fail }]).flaky, []);
+  // pytest-rerunfailures and Maven Surefire.
+  const rerun = '<testcase classname="a" name="r"><rerunFailure message="x"/></testcase><testcase classname="a" name="s"><flakyFailure/></testcase>';
+  const parsed = parseReport(rerun);
+  assert.deepEqual([...parsed.results], [["a::r", "passed"], ["a::s", "passed"]]);
+  assert.deepEqual(mergeRuns([{ path: "1", xml: rerun }]).flaky, ["a::r", "a::s"]);
+});
+
+it("knows a report that was cut off while it was written", () => {
+  assert.equal(parseReport("﻿<testsuites><testsuite><testcase name=\"a\"/></testsuite></testsuites>\n").complete, true);
+  assert.equal(parseReport('<testsuites name="x"/>').complete, true);
+  assert.equal(parseReport('<testcase name="a"/>').complete, true);
+  assert.equal(parseReport('<testsuites><testsuite><testcase name="a"/>').complete, false);
+});
+
+it("does not report missing tests when the head report is cut off, but still reports failures in it", () => {
+  const cut = report({ a: "fail" }).replace("</testsuite>", "");
+  const r = run(report({ a: "pass", b: "pass", c: "pass" }), cut);
+  assert.deepEqual(r.findings.map((f) => f.message), ["Test `tests::a` fails at head and passed at base"]);
+  assert.equal(r.tests?.incomplete.length, 1);
+  const none = run(report({ a: "pass" }), "<testsuites>");
+  assert.deepEqual(none.findings, []);
+});
+
+it("lists flaky tests in the report and the Markdown, not as findings", () => {
+  const repo = makeFixtureRepo(join(import.meta.dirname, "fixtures", "checks-disabled", "non-python-ignored"));
+  const tmp = mkdtempSync(join(tmpdir(), "rsp-junit-"));
+  try {
+    writeFileSync(join(tmp, "base.xml"), report({ a: "pass", b: "pass" }));
+    writeFileSync(join(tmp, "head-0.xml"), report({ a: "fail", b: "pass" }));
+    writeFileSync(join(tmp, "head-1.xml"), report({ a: "pass", b: "pass" }));
+    const r = check({
+      repoDir: repo.dir,
+      base: repo.base,
+      head: repo.head,
+      junitBase: [join(tmp, "base.xml")],
+      junitHead: [join(tmp, "head-0.xml"), join(tmp, "head-1.xml")],
+    });
+    assert.deepEqual(r.findings, []);
+    assert.deepEqual(r.tests, { flaky: ["tests::a"], incomplete: [] });
+    assert.ok(toMarkdown(r).includes("Failed and also passed at head, not counted as failures: `tests::a`."));
+  } finally {
+    repo.cleanup();
+    rmSync(tmp, { recursive: true, force: true });
   }
 });

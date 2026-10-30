@@ -18,6 +18,7 @@ Counted per mutation and rule. A true positive is an expected rule that reported
 | `interface/route-removed` | 0 | 0 | 0 | n/a | n/a |
 | `interface/untested-change` | 3 | 0 | 0 | 100% | 100% |
 | `tests/delta` | 0 | 0 | 0 | n/a | n/a |
+| `tests/uncovered-change` | 0 | 0 | 0 | n/a | n/a |
 
 ## By mutation
 

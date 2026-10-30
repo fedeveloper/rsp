@@ -1066,7 +1066,8 @@ function runRules(ctx, rules, options = [], config) {
     options,
     config: config?.path ?? null,
     rules: rules.map((r) => ({ id: r.id, version: r.version })).sort((a, b) => cmp(a.id, b.id)),
-    findings
+    findings,
+    ...ctx.tests && { tests: { flaky: ctx.tests.head.flaky, incomplete: ctx.tests.head.incomplete } }
   };
 }
 function compareFindings(a, b) {
@@ -1088,30 +1089,114 @@ function cmp(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+// src/coverage.ts
+function parseCoverage(text) {
+  const body = text.replace(/^﻿/, "");
+  if (/^SF:/m.test(body)) return parseLcov(body);
+  if (/<coverage\b/.test(body)) return parseCobertura(body);
+  return void 0;
+}
+function parseLcov(text) {
+  const out = /* @__PURE__ */ new Map();
+  let lines;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("SF:")) {
+      const file = line.slice(3);
+      lines = out.get(file) ?? /* @__PURE__ */ new Map();
+      out.set(file, lines);
+    } else if (line === "end_of_record") {
+      lines = void 0;
+    } else if (lines && line.startsWith("DA:")) {
+      const [n, hits] = line.slice(3).split(",");
+      add(lines, Number(n), Number(hits));
+    }
+  }
+  return out;
+}
+var ATTR = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
+function attrs(tag) {
+  const out = /* @__PURE__ */ new Map();
+  for (const a of tag.matchAll(ATTR)) out.set(a[1], (a[3] ?? a[4] ?? "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'"));
+  return out;
+}
+function parseCobertura(xml) {
+  const out = /* @__PURE__ */ new Map();
+  const text = xml.replace(/<!--[\s\S]*?-->/g, "");
+  const sources = [...text.matchAll(/<source>([^<]*)<\/source>/g)].map((m) => m[1].trim()).filter(Boolean);
+  for (const cls of text.matchAll(/<class\b([^>]*)>([\s\S]*?)<\/class>/g)) {
+    const filename = attrs(cls[1]).get("filename");
+    if (!filename) continue;
+    const name = filename.startsWith("/") || sources.length !== 1 ? filename : `${sources[0].replace(/\/$/, "")}/${filename}`;
+    const lines = out.get(name) ?? /* @__PURE__ */ new Map();
+    out.set(name, lines);
+    for (const l of cls[2].matchAll(/<line\b([^>]*?)\/?>/g)) {
+      const a = attrs(l[1]);
+      add(lines, Number(a.get("number")), Number(a.get("hits")));
+    }
+  }
+  return out;
+}
+function add(lines, n, hits) {
+  if (!Number.isInteger(n) || n < 1 || !Number.isFinite(hits)) return;
+  lines.set(n, Math.max(lines.get(n) ?? 0, hits));
+}
+function coverageByRepoPath(reports, repoFiles) {
+  const out = /* @__PURE__ */ new Map();
+  for (const report of reports) {
+    for (const [written, lines] of report) {
+      const path = written.replace(/\\/g, "/").replace(/^\.\//, "");
+      let best;
+      for (const f of repoFiles) {
+        if ((path === f || path.endsWith(`/${f}`)) && (!best || f.length > best.length)) best = f;
+      }
+      if (!best) continue;
+      const merged = out.get(best) ?? /* @__PURE__ */ new Map();
+      out.set(best, merged);
+      for (const [n, hits] of lines) add(merged, n, hits);
+    }
+  }
+  return out;
+}
+
 // src/junit.ts
 var TESTCASE = /<testcase\b((?:[^>"']|"[^"]*"|'[^']*')*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
-var ATTR = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
-function parseJUnit(xml) {
+var ATTR2 = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
+function parseReport(xml) {
   const results = /* @__PURE__ */ new Map();
-  const text = xml.replace(/<!--[\s\S]*?-->/g, "");
+  const retried = /* @__PURE__ */ new Set();
+  const text = xml.replace(/^\uFEFF/, "").replace(/<!--[\s\S]*?-->/g, "");
   for (const m of text.matchAll(TESTCASE)) {
-    const attrs = /* @__PURE__ */ new Map();
-    for (const a of m[1].matchAll(ATTR)) attrs.set(a[1], unescape(a[3] ?? a[4] ?? ""));
-    const name = attrs.get("name");
+    const attrs2 = /* @__PURE__ */ new Map();
+    for (const a of m[1].matchAll(ATTR2)) attrs2.set(a[1], unescape(a[3] ?? a[4] ?? ""));
+    const name = attrs2.get("name");
     if (!name) continue;
     const body = (m[3] ?? "").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
     const status = /<(failure|error)\b/.test(body) ? "failed" : /<skipped\b/.test(body) ? "skipped" : "passed";
-    const id = [attrs.get("classname") || attrs.get("file"), name].filter(Boolean).join("::");
+    const id = [attrs2.get("classname") || attrs2.get("file"), name].filter(Boolean).join("::");
+    if (status === "passed" && /<(rerunFailure|rerunError|flakyFailure|flakyError)\b/.test(body)) retried.add(id);
     results.set(id, combine(results.get(id), status));
   }
-  return results;
+  const root = /<(testsuites|testsuite)\b(?:[^>"']|"[^"]*"|'[^']*')*?(\/?)>/.exec(text);
+  const complete = !root || root[2] === "/" || new RegExp(`</${root[1]}\\s*>$`).test(text.trimEnd());
+  return { results, retried, complete };
 }
 function mergeRuns(files) {
   const results = /* @__PURE__ */ new Map();
+  const failed = /* @__PURE__ */ new Set();
+  const flaky = /* @__PURE__ */ new Set();
+  const incomplete = [];
   for (const f of files) {
-    for (const [id, status] of parseJUnit(f.xml)) results.set(id, combine(results.get(id), status));
+    const report = parseReport(f.xml);
+    if (!report.complete) incomplete.push(f.path);
+    report.retried.forEach((id) => flaky.add(id));
+    for (const [id, status] of report.results) {
+      if (status === "failed") failed.add(id);
+      results.set(id, combine(results.get(id), status));
+    }
   }
-  return { files: files.map((f) => f.path), results };
+  for (const id of failed) if (results.get(id) === "passed") flaky.add(id);
+  return { files: files.map((f) => f.path), results, flaky: [...flaky].sort(), incomplete };
 }
 function combine(a, b) {
   if (a === void 0) return b;
@@ -2199,7 +2284,7 @@ function declaredDependencies(ctx) {
   const manifests = [];
   const dynamic = [];
   const names = /* @__PURE__ */ new Set();
-  const add = (requirement) => {
+  const add2 = (requirement) => {
     const m = REQUIREMENT_NAME.exec(requirement);
     if (m) names.add(normalizeDist(m[1]));
   };
@@ -2225,7 +2310,7 @@ function declaredDependencies(ctx) {
     }
     if (found === void 0) continue;
     manifests.push(path);
-    found.forEach(add);
+    found.forEach(add2);
   }
   return { manifests, names, dynamic };
 }
@@ -3569,9 +3654,9 @@ function touchesDefinition(ctx, path, sig, touched) {
 // src/rules/tests-delta.ts
 var testsDelta = {
   id: "tests/delta",
-  version: "0.1.0",
+  version: "0.2.0",
   keys: "the test id, `classname::name` as in the JUnit report, or `no-tests`",
-  description: "Differences between the test results at base and at head, read from JUnit reports: tests that pass at base and fail at head, tests that ran at base and are skipped or missing at head. Runs only when reports are given.",
+  description: "Differences between the test results at base and at head, read from JUnit reports: tests that pass at base and fail at head, tests that ran at base and are skipped or missing at head. Runs only when reports are given. Missing tests are not reported when a head report is cut off.",
   run(ctx) {
     if (!ctx.tests) return [];
     const { base, head } = ctx.tests;
@@ -3582,7 +3667,8 @@ var testsDelta = {
       locations: [{ path: where2 }],
       evidence
     });
-    if (head.results.size === 0 && base.results.size > 0) {
+    const partial = head.incomplete.length > 0;
+    if (head.results.size === 0 && base.results.size > 0 && !partial) {
       return [finding("no-tests", `No test results at head; ${base.results.size} at base`, `tests: ${base.results.size} -> 0`)];
     }
     const findings = [];
@@ -3594,7 +3680,7 @@ var testsDelta = {
         findings.push(finding(id, `Test ${codeSpan(id)} is skipped at head and ran at base`, `${id}: ${before} -> skipped`));
       }
     }
-    if (head.results.size < base.results.size) {
+    if (head.results.size < base.results.size && !partial) {
       for (const [id, before] of base.results) {
         if (head.results.has(id)) continue;
         findings.push(
@@ -3610,8 +3696,37 @@ var testsDelta = {
   }
 };
 
+// src/rules/tests-uncovered.ts
+var NEVER_RUNS = /^(#|\/\/|\/\*|\*|$)|^(export\s+)?(declare\s+|interface\s|type\s+[\w$]+\s*(<.*>)?\s*=|import\s+type\b)/;
+var testsUncovered = {
+  id: "tests/uncovered-change",
+  version: "0.1.0",
+  keys: "the file path, e.g. `src/billing.py`",
+  description: "Added lines that the coverage report of the tests at head measures and that did not run, counted per file: one fact per file. Runs only when coverage reports are given (LCOV or Cobertura).",
+  run(ctx) {
+    if (!ctx.coverage) return [];
+    const deleted = new Set(ctx.files.flatMap((f) => f.lines.filter((l) => l.kind === "del").map((l) => l.text.trim())));
+    const findings = [];
+    for (const file of ctx.files) {
+      if (file.binary || file.status === "deleted") continue;
+      const hits = ctx.coverage.get(file.path);
+      if (!hits) continue;
+      const measured = file.lines.filter((l) => l.kind === "add" && hits.has(l.newLine) && !deleted.has(l.text.trim()) && !NEVER_RUNS.test(l.text.trim()));
+      const missed = measured.filter((l) => hits.get(l.newLine) === 0);
+      if (missed.length === 0) continue;
+      findings.push({
+        key: file.path,
+        message: `${missed.length} of the ${measured.length} added ${measured.length === 1 ? "line" : "lines"} of ${codeSpan(file.path)} that the coverage report measures did not run in the tests at head`,
+        locations: [{ path: file.path, line: missed[0].newLine }],
+        evidence: missed[0].text.trim()
+      });
+    }
+    return findings;
+  }
+};
+
 // src/rules/index.ts
-var ALL_RULES = [checksDisabled, depsLockfile, depsUndeclared, envMissingExample, interfaceRemoved, interfaceRoutes, interfaceUntested, testsDelta];
+var ALL_RULES = [checksDisabled, depsLockfile, depsUndeclared, envMissingExample, interfaceRemoved, interfaceRoutes, interfaceUntested, testsDelta, testsUncovered];
 
 // src/report/json.ts
 function toJson(report) {
@@ -3646,6 +3761,15 @@ function toMarkdown(report) {
     for (const f of report.findings) {
       lines.push(`| ${inline(f.ruleId)} | ${where(f)} | ${inline(f.message)} | ${cell(codeSpan(f.evidence))} |`);
     }
+  }
+  const flaky = report.tests?.flaky ?? [];
+  if (flaky.length > 0) {
+    const shown = flaky.slice(0, 20).map((id) => cell(codeSpan(id))).join(", ");
+    const more = flaky.length > 20 ? ` and ${flaky.length - 20} more` : "";
+    lines.push("", `Failed and also passed at head, not counted as failures: ${shown}${more}.`);
+  }
+  for (const file of report.tests?.incomplete ?? []) {
+    lines.push("", `The head report ${codeSpan(file)} is cut off, so tests missing from it are not reported.`);
   }
   const opts = report.options.map((o) => ` ${o}`).join("");
   if (report.config) lines.push("", `Configuration: ${codeSpan(report.config)} from the base commit.`);
@@ -3723,12 +3847,22 @@ function check(opts) {
   } else if (opts.junitBase?.length || opts.junitHead?.length) {
     throw new Error("JUnit reports must be given for both base and head");
   }
+  if (opts.coverage?.length) {
+    const reports = [];
+    for (const path of opts.coverage) {
+      const parsed = parseCoverage(readFileSync(path, "utf8"));
+      if (!parsed) throw new Error(`${path} is not an LCOV or Cobertura coverage report`);
+      reports.push(parsed);
+    }
+    ctx.coverage = coverageByRepoPath(reports, ctx.listHead());
+  }
   const rules = opts.rules ? selectRules(opts.rules) : ALL_RULES.filter((r) => config?.rules[r.id]?.enabled !== false);
   const options = [
     ...exclude.map((g) => `--exclude ${shellQuote(g)}`),
     ...opts.config === false ? ["--no-config"] : [],
     ...(ctx.tests?.base.files ?? []).map((f) => `--junit-base ${shellQuote(f)}`),
-    ...(ctx.tests?.head.files ?? []).map((f) => `--junit-head ${shellQuote(f)}`)
+    ...(ctx.tests?.head.files ?? []).map((f) => `--junit-head ${shellQuote(f)}`),
+    ...(opts.coverage ?? []).map((f) => `--coverage ${shellQuote(f)}`)
   ];
   return runRules(ctx, rules, options, config);
 }
@@ -3753,6 +3887,7 @@ function runTestsAtBaseAndHead(opts) {
   const base = mergeBase(opts.repoDir, resolveCommit(opts.repoDir, opts.base), head);
   const reports = join(opts.workDir, "rsp-junit");
   mkdirSync(reports, { recursive: true });
+  const coverage = [];
   const runAt = (label, commit, attempt) => {
     const dir = join(opts.workDir, `rsp-${label}`);
     if (attempt === 0) {
@@ -3768,6 +3903,15 @@ function runTestsAtBaseAndHead(opts) {
     opts.log(`rsp: test command at ${label} exited with ${res.status ?? res.signal}`);
     const found = findFiles(dir, globToRegExp(opts.junit));
     if (found.length === 0) opts.log(`::warning::rsp: the test command wrote no file matching ${opts.junit} at ${label}`);
+    if (opts.coverage && label === "head" && attempt === 0) {
+      const written = findFiles(dir, globToRegExp(opts.coverage));
+      if (written.length === 0) opts.log(`::warning::rsp: the test command wrote no file matching ${opts.coverage} at head`);
+      written.forEach((f, i) => {
+        const target = join(reports, `coverage-${i}${f.endsWith(".xml") ? ".xml" : ".info"}`);
+        copyFileSync(join(dir, f), target);
+        coverage.push(target);
+      });
+    }
     return found.map((f, i) => {
       const target = join(reports, `${label}-${attempt}-${i}.xml`);
       copyFileSync(join(dir, f), target);
@@ -3785,7 +3929,7 @@ function runTestsAtBaseAndHead(opts) {
       if (newFailures.length === 0) break;
       junitHead.push(...runAt("head", head, attempt));
     }
-    return { junitBase, junitHead };
+    return { junitBase, junitHead, coverage };
   } finally {
     for (const label of ["base", "head"]) {
       try {
@@ -3857,6 +4001,7 @@ async function runAction(env = process.env, fetchImpl = fetch) {
         head: pr.head.sha,
         command: input("test-command"),
         junit: input("junit") || "**/junit*.xml",
+        coverage: input("coverage") || void 0,
         retries,
         workDir: env.RUNNER_TEMP ?? process.cwd(),
         log

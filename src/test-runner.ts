@@ -17,6 +17,8 @@ export interface TestRunOptions {
   command: string;
   /** Glob, relative to the repository root, of the JUnit files the command writes. */
   junit: string;
+  /** Glob of the coverage reports the command writes; collected from the first run at head only. */
+  coverage?: string;
   /** Extra runs at head when tests fail there but passed at base, to clear flaky failures. */
   retries: number;
   /** Scratch directory for the worktrees and the collected reports. */
@@ -24,12 +26,13 @@ export interface TestRunOptions {
   log: (line: string) => void;
 }
 
-export function runTestsAtBaseAndHead(opts: TestRunOptions): { junitBase: string[]; junitHead: string[] } {
+export function runTestsAtBaseAndHead(opts: TestRunOptions): { junitBase: string[]; junitHead: string[]; coverage: string[] } {
   const head = resolveCommit(opts.repoDir, opts.head);
   const base = mergeBase(opts.repoDir, resolveCommit(opts.repoDir, opts.base), head);
   const reports = join(opts.workDir, "rsp-junit");
   mkdirSync(reports, { recursive: true });
 
+  const coverage: string[] = [];
   const runAt = (label: "base" | "head", commit: string, attempt: number): string[] => {
     const dir = join(opts.workDir, `rsp-${label}`);
     if (attempt === 0) {
@@ -46,6 +49,15 @@ export function runTestsAtBaseAndHead(opts: TestRunOptions): { junitBase: string
     opts.log(`rsp: test command at ${label} exited with ${res.status ?? res.signal}`);
     const found = findFiles(dir, globToRegExp(opts.junit));
     if (found.length === 0) opts.log(`::warning::rsp: the test command wrote no file matching ${opts.junit} at ${label}`);
+    if (opts.coverage && label === "head" && attempt === 0) {
+      const written = findFiles(dir, globToRegExp(opts.coverage));
+      if (written.length === 0) opts.log(`::warning::rsp: the test command wrote no file matching ${opts.coverage} at head`);
+      written.forEach((f, i) => {
+        const target = join(reports, `coverage-${i}${f.endsWith(".xml") ? ".xml" : ".info"}`);
+        copyFileSync(join(dir, f), target);
+        coverage.push(target);
+      });
+    }
     return found.map((f, i) => {
       const target = join(reports, `${label}-${attempt}-${i}.xml`);
       copyFileSync(join(dir, f), target);
@@ -64,7 +76,7 @@ export function runTestsAtBaseAndHead(opts: TestRunOptions): { junitBase: string
       if (newFailures.length === 0) break;
       junitHead.push(...runAt("head", head, attempt));
     }
-    return { junitBase, junitHead };
+    return { junitBase, junitHead, coverage };
   } finally {
     for (const label of ["base", "head"]) {
       try {

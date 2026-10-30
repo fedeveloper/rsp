@@ -41,6 +41,7 @@ export function runRules(ctx: DiffContext, rules: Rule[], options: string[] = []
     config: config?.path ?? null,
     rules: rules.map((r) => ({ id: r.id, version: r.version })).sort((a, b) => cmp(a.id, b.id)),
     findings,
+    ...(ctx.tests && { tests: { flaky: ctx.tests.head.flaky, incomplete: ctx.tests.head.incomplete } }),
   };
 }
 

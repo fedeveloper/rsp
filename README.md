@@ -96,7 +96,7 @@ RSP needs Node 22 or later and git. It supports Python and JavaScript/TypeScript
 
 ## What RSP reports
 
-There are eight rules. Each looks at the diff between the merge-base of the pull request and its head, and each finding has a **key**, which is what you name in `.rsp.toml` to accept that kind of finding (see [Configuration](#configuration-rsptoml)). `rsp --list-rules` prints the same information.
+There are nine rules. Each looks at the diff between the merge-base of the pull request and its head, and each finding has a **key**, which is what you name in `.rsp.toml` to accept that kind of finding (see [Configuration](#configuration-rsptoml)). `rsp --list-rules` prints the same information.
 
 ### `checks/disabled`
 
@@ -211,7 +211,17 @@ Differences between the test results at base and at head, read from JUnit XML re
 - A test that ran at base and is missing at head, reported only when the head suite is smaller than the base one, so renamed and moved tests are not reported as missing.
 - No test results at all at head when there were some at base.
 
-Tests that already failed at base are not reported: they are not caused by the pull request.
+Tests that already failed at base are not reported: they are not caused by the pull request. Tests that failed and also passed at head, on a rerun or through the runner's own retries (pytest-rerunfailures, Maven Surefire), count as passed and are listed under the table as flaky, not as findings. When a head report was cut off while it was written, missing tests are not reported, and the report says so.
+
+### `tests/uncovered-change`
+
+Added lines that the coverage report of the tests at head measures and that did not run, one fact per file. It runs only when coverage reports are given, so it is off unless you ask for it; see [Coverage of added lines](#coverage-of-added-lines). The key is the file path.
+
+```text
+tests/uncovered-change  src/billing.py:7  1 of the 4 added lines of `src/billing.py` that the coverage report measures did not run in the tests at head
+```
+
+It reads LCOV and Cobertura XML. Lines the report does not measure, comments, TypeScript type-only declarations and lines moved from elsewhere in the diff are not counted, and files the report does not mention are not reported.
 
 ## Configuration: `.rsp.toml`
 
@@ -291,6 +301,29 @@ rsp check --base origin/main --junit-base base/junit.xml --junit-head head/junit
 ```
 
 Both options are repeatable for sharded suites; results from several files of the same commit are merged, and a test that passed in any of them counts as passed.
+
+## Coverage of added lines
+
+The `tests/uncovered-change` rule reads a line coverage report of the tests at head:
+
+| Runner | How to write the report |
+| --- | --- |
+| pytest | `pytest --cov --cov-report=xml` (pytest-cov, writes `coverage.xml`) |
+| coverage.py | `coverage xml` or `coverage lcov` |
+| Vitest | `vitest run --coverage --coverage.reporter=lcov` (writes `coverage/lcov.info`) |
+| Jest | `jest --coverage --coverageReporters=lcov` |
+| c8, nyc | `--reporter=lcov` |
+
+In the Action, set `coverage` to a glob of the report the test command writes; it is collected from the first run at head:
+
+```yaml
+- uses: fedeveloper/rsp@v0.4.0
+  with:
+    test-command: pip install -e '.[test]' && pytest --junitxml=junit.xml --cov --cov-report=xml
+    coverage: coverage.xml
+```
+
+From the command line, pass `--coverage <file>`, repeatable. Paths in the report are matched to the repository's files by their longest common ending, so absolute paths written on another machine still match.
 
 ## Integrating RSP into your workflow
 
@@ -375,7 +408,8 @@ The Markdown report is the comment shown above. The JSON report, from `--format 
 ```
 
 - `fingerprint` identifies a finding across pushes: it is built from the rule, the file and the evidence, not from line numbers, so it stays the same when unrelated lines move. Use it to track findings over time.
-- `reproduce` is the full command, including any options that affected the result (`--exclude`, `--no-config`, JUnit reports).
+- `reproduce` is the full command, including any options that affected the result (`--exclude`, `--no-config`, JUnit and coverage reports).
+- `tests` is present when JUnit reports were given: `flaky` lists tests that failed and also passed at head, and `incomplete` lists head reports that were cut off. They describe the test run, not the diff, so they are not findings.
 - Keys and objects are sorted, and findings are sorted by rule, path and line, so two runs on the same commits give the same bytes.
 
 ## GitHub Action reference
@@ -387,6 +421,7 @@ The Markdown report is the comment shown above. The JSON report, from `--format 
 | `rules` | all | Rule ids to run, one per line or comma separated. |
 | `test-command` | | Shell command that installs dependencies and runs the tests, writing JUnit XML. Enables `tests/delta`. |
 | `junit` | `**/junit*.xml` | Glob of the JUnit files the test command writes, relative to the repository root. |
+| `coverage` | empty | Glob of the LCOV or Cobertura reports the test command writes at head, for `tests/uncovered-change`. |
 | `test-retries` | `1` | Extra runs at head while tests fail there but passed at base. |
 | `comment` | `true` | `false` writes only the job summary. |
 | `github-token` | `github.token` | Token used for the comment. Needs `pull-requests: write`. |
@@ -413,6 +448,7 @@ Options:
   --no-config       Ignore .rsp.toml in the base commit
   --junit-base <f>  JUnit report of the tests run at base; repeatable
   --junit-head <f>  JUnit report of the tests run at head; repeatable
+  --coverage <f>    LCOV or Cobertura coverage report of the tests at head; repeatable
   --list-rules      Print the available rules and exit
   --version         Print the version and exit
   --help            Print this help and exit
@@ -468,7 +504,7 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 - **RSP is not a reviewer.** No findings does not mean a change is correct, only that none of these specific things happened.
 - **Bounded on purpose.** Rules use line-level parsing tuned for precision, not full parsers. Unusual syntax is more likely to be missed than misreported.
 - **Two ecosystems.** Python and JavaScript/TypeScript. `deps/lockfile` checks that the lockfile records what the manifest declares, not that the locked versions satisfy the ranges. CI checks cover GitHub Actions workflows.
-- **Interface changes are about what callers write.** Parameters, TypeScript type fields, return annotations, imported names and literal routes are compared; behaviour, Python class attributes and routes built at run time are not, and "a test mentions it" is a name match, not coverage.
+- **Interface changes are about what callers write.** Parameters, TypeScript type fields, return annotations, imported names and literal routes are compared; behaviour, Python class attributes and routes built at run time are not, and "a test mentions it" is a name match, not coverage. Coverage is read only when you give a report.
 - **Test delta costs a second test run** and is only as good as the JUnit report: tests that the runner does not report, such as doctests in some setups, are not seen.
 
 ## FAQ
