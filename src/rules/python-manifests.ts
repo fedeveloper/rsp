@@ -14,9 +14,14 @@ export interface DeclaredDeps {
 const REQUIREMENTS = /(^|\/)(requirements[^/]*\.(txt|in)|requirements\/[^/]+\.(txt|in))$/;
 const REQUIREMENT_NAME = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)/;
 
+const ENVIRONMENT_YML = /(^|\/)environment\.ya?ml$/;
+const INCLUDE = /^\s*(?:-r|--requirement|-c|--constraint)(?:\s+|=)(\S+)/;
+
 /**
  * Every dependency declared at head, across pyproject.toml (PEP 621, PEP 735,
- * Poetry, PDM, uv), requirements files, setup.cfg and literal lists in setup.py.
+ * Poetry, PDM, uv), requirements files and the files they include with `-r`
+ * or `-c`, Pipfile, conda environment files, setup.cfg and literal lists in
+ * setup.py. Reading more files can only hide a finding, never invent one.
  */
 export function declaredDependencies(ctx: DiffContext): DeclaredDeps {
   const manifests: string[] = [];
@@ -27,11 +32,22 @@ export function declaredDependencies(ctx: DiffContext): DeclaredDeps {
     if (m) names.add(normalizeDist(m[1]!));
   };
 
-  for (const path of ctx.listHead()) {
+  // Requirements files, and every file they include with -r or -c whatever its name.
+  const requirements = new Set(ctx.listHead().filter((p) => REQUIREMENTS.test(p)));
+  for (const path of requirements) {
+    for (const target of includes(path, ctx.readHead(path) ?? "")) {
+      if (ctx.readHead(target) !== undefined) requirements.add(target);
+    }
+  }
+
+  for (const path of [...new Set([...ctx.listHead(), ...requirements])].sort()) {
     const base = path.split("/").pop()!;
     let found: string[] | undefined;
     if (base === "pyproject.toml") found = fromPyproject(ctx.readHead(path) ?? "");
-    else if (REQUIREMENTS.test(path)) found = fromRequirements(ctx.readHead(path) ?? "");
+    else if (requirements.has(path)) {
+      found = fromRequirements(ctx.readHead(path) ?? "");
+    } else if (base === "Pipfile") found = fromPipfile(ctx.readHead(path) ?? "");
+    else if (ENVIRONMENT_YML.test(path)) found = fromEnvironmentYml(ctx.readHead(path) ?? "");
     else if (base === "setup.cfg") found = fromSetupCfg(ctx.readHead(path) ?? "");
     else if (base === "setup.py") {
       const text = ctx.readHead(path) ?? "";
@@ -83,6 +99,52 @@ function fromRequirements(text: string): string[] {
     const egg = /#egg=([A-Za-z0-9._-]+)/.exec(raw);
     if (egg) out.push(egg[1]!);
     else if (!line.startsWith("-") && !/^[a-z+]+:\/\//.test(line)) out.push(line);
+  }
+  return out;
+}
+
+/** Paths of the files a requirements file includes with `-r` or `-c`, relative to the repository root. */
+function includes(path: string, text: string): string[] {
+  const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    const m = INCLUDE.exec(line);
+    if (!m || /^[a-z+]+:\/\//.test(m[1]!)) continue;
+    const parts: string[] = [];
+    for (const part of `${dir}${m[1]}`.split("/")) {
+      if (part === "..") parts.pop();
+      else if (part !== "." && part !== "") parts.push(part);
+    }
+    out.push(parts.join("/"));
+  }
+  return out;
+}
+
+/** `[packages]` and `[dev-packages]` of a Pipfile. */
+function fromPipfile(text: string): string[] {
+  let doc: Record<string, any>;
+  try {
+    doc = parseToml(text) as Record<string, any>;
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const table of [doc.packages, doc["dev-packages"]]) {
+    if (table && typeof table === "object") out.push(...Object.keys(table));
+  }
+  return out;
+}
+
+/**
+ * The list items of a conda environment file, including its `pip:` list. Conda
+ * package names mostly match PyPI names; where they do not, the extra name can
+ * only hide a finding.
+ */
+function fromEnvironmentYml(text: string): string[] {
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    const m = /^\s*-\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*[=<>!~\[]|\s*$)/.exec(line);
+    if (m && !/:\s*$/.test(line)) out.push(m[1]!.replace(/^conda-forge::/, ""));
   }
   return out;
 }

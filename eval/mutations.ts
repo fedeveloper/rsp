@@ -15,6 +15,7 @@ export const CD = "checks/disabled";
 export const DEP = "deps/undeclared";
 export const ENV = "env/missing-example";
 export const IF = "interface/untested-change";
+export const LOCK = "deps/lockfile";
 
 /** Replaces exactly one occurrence, so a mutation fails loudly if the project drifts. */
 export function replace(files: Files, path: string, from: string, to: string): void {
@@ -83,6 +84,13 @@ export const MUTATIONS: Mutation[] = [
   risky("dep-and-env", [DEP, ENV], "Import httpx and read HTTPX_TIMEOUT, neither declared", (f) =>
     replace(f, "inventory/client.py", "import requests\n", "import os\n\nimport httpx\nimport requests\n\nTIMEOUT = float(os.getenv(\"HTTPX_TIMEOUT\", \"10\"))\n")),
 
+  risky("dependency-not-locked", [LOCK], "Add httpx to pyproject without updating uv.lock", (f) => {
+    replace(f, "pyproject.toml", '    "pydantic>=2.6",\n', '    "pydantic>=2.6",\n    "httpx>=0.27",\n');
+    replace(f, "inventory/client.py", "import requests\n", "import httpx\nimport requests\n");
+  }),
+  risky("dependency-removed-still-locked", [LOCK], "Remove pydantic from pyproject but not from uv.lock", (f) =>
+    replace(f, "pyproject.toml", '    "pydantic>=2.6",\n', "")),
+
   risky("param-added-untested", [IF], "Add a parameter to a public function without touching tests", (f) =>
     replace(f, "inventory/client.py", "def fetch_prices(skus: list[str])", "def fetch_prices(skus: list[str], currency: str = \"EUR\")")),
   risky("param-renamed-untested", [IF], "Rename a keyword parameter of a public method", (f) => {
@@ -103,9 +111,14 @@ export const MUTATIONS: Mutation[] = [
     replace(f, "inventory/client.py", "import requests\n", "import json\nimport logging\nfrom pathlib import Path\n\nimport requests\n")),
   benign("local-import", "Import a module of the project itself", (f) =>
     replace(f, "inventory/client.py", "from inventory.config import load_settings\n", "from inventory.config import load_settings\nfrom inventory.store import Store\nfrom . import store\n")),
-  benign("dependency-declared", "Add httpx to pyproject and import it", (f) => {
+  benign("dependency-declared", "Add httpx to pyproject and uv.lock and import it", (f) => {
     replace(f, "pyproject.toml", '    "pydantic>=2.6",\n', '    "pydantic>=2.6",\n    "httpx>=0.27",\n');
+    replace(f, "uv.lock", '    { name = "pydantic", specifier = ">=2.6" },\n', '    { name = "httpx", specifier = ">=0.27" },\n    { name = "pydantic", specifier = ">=2.6" },\n');
     replace(f, "inventory/client.py", "import requests\n", "import httpx\nimport requests\n");
+  }),
+  benign("dependency-bumped", "Raise the minimum version of requests in pyproject and uv.lock", (f) => {
+    replace(f, "pyproject.toml", '"requests>=2.31"', '"requests>=2.32"');
+    replace(f, "uv.lock", '{ name = "requests", specifier = ">=2.31" }', '{ name = "requests", specifier = ">=2.32" }');
   }),
   benign("env-documented", "Read REDIS_URL and add it to .env.example", (f) => {
     replace(f, ".env.example", "API_KEY=\n", "API_KEY=\nREDIS_URL=redis://localhost:6379\n");

@@ -42,7 +42,7 @@ const KNOWN_DISTRIBUTIONS: Record<string, string[]> = {
 
 export const depsUndeclared: Rule = {
   id: "deps/undeclared",
-  version: "0.3.0",
+  version: "0.4.0",
   keys: "the imported module (Python) or package (JavaScript), e.g. `boto3`",
   description:
     "Python and JavaScript/TypeScript imports added in the diff whose package is not declared in a dependency manifest.",

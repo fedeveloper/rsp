@@ -1,0 +1,3 @@
+[
+  {"ruleId": "deps/lockfile", "path": "package.json", "line": 6, "message": "Declares `zod` `^3.23.0` in dependencies; pnpm-lock.yaml does not list it", "evidence": "\"zod\": \"^3.23.0\""}
+]

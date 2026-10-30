@@ -1,0 +1,3 @@
+[
+  {"ruleId": "deps/undeclared", "path": "app.py", "line": 5, "message": "Imports `tenacity`, not declared in any of 4 dependency manifests", "evidence": "import tenacity"}
+]

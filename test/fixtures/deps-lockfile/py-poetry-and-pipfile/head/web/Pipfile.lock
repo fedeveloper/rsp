@@ -1,0 +1,18 @@
+{
+    "_meta": {
+        "hash": {
+            "sha256": "x"
+        },
+        "pipfile-spec": 6
+    },
+    "default": {
+        "flask": {
+            "version": "==3.1.0"
+        }
+    },
+    "develop": {
+        "pytest": {
+            "version": "==8.3.4"
+        }
+    }
+}

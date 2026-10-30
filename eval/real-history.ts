@@ -51,6 +51,7 @@ function countLine(dir: string, commit: string, line: string): number {
  */
 function verify(dir: string, base: string, head: string, f: Finding): string {
   const loc = f.locations[0];
+  if (f.ruleId === "deps/lockfile") return verifyLockfile(dir, base, head, f);
   if (!loc?.line) return "n/a";
   const text = execFileSync("git", ["-C", dir, "show", `${head}:${loc.path}`], { encoding: "utf8" }).split("\n")[loc.line - 1];
   if (text?.trim() !== f.evidence) return "WRONG LINE";
@@ -59,6 +60,26 @@ function verify(dir: string, base: string, head: string, f: Finding): string {
   const before = countLine(dir, base, text);
   const after = countLine(dir, head, text);
   return after > before ? `new line (${before} -> ${after})` : `NOT NEW (${before} -> ${after})`;
+}
+
+/**
+ * For a lockfile finding: the manifest line holds the evidence (or, for a
+ * removal, the base manifest did), and the package name occurs in the lockfile
+ * at head (for "still lists it") or not at all, or the lockfile did not change
+ * in the commit (for "does not list it" and "records").
+ */
+function verifyLockfile(dir: string, base: string, head: string, f: Finding): string {
+  const [manifest, lock] = f.locations;
+  if (!manifest || !lock) return "NO LOCKFILE";
+  const show = (commit: string, path: string) => execFileSync("git", ["-C", dir, "show", `${commit}:${path}`], { encoding: "utf8" });
+  const lines = show(f.message.startsWith("Removes") ? base : head, manifest.path).split("\n").map((l) => l.trim());
+  if (manifest.line ? lines[manifest.line - 1] !== f.evidence : !lines.includes(f.evidence)) return "WRONG LINE";
+  const unchanged = execFileSync("git", ["-C", dir, "diff", "--name-only", base, head, "--", lock.path], { encoding: "utf8" }).trim() === "";
+  const name = /`([^`]+)`/.exec(f.message)![1]!;
+  const mentioned = new RegExp(`["'/\\s]${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'@:\\s]`, "i").test(show(head, lock.path));
+  if (f.message.startsWith("Removes")) return mentioned ? "name still in lockfile" : "NAME NOT IN LOCKFILE";
+  if (unchanged) return "lockfile unchanged";
+  return mentioned ? "CHECK: lockfile changed and mentions the name" : "name not in lockfile";
 }
 
 /**

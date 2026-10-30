@@ -1,0 +1,5 @@
+[
+  {"ruleId": "deps/lockfile", "path": "package.json", "message": "Removes `lodash` from dependencies; package-lock.json still lists it", "evidence": "\"lodash\": \"^4.17.21\""},
+  {"ruleId": "deps/lockfile", "path": "package.json", "line": 5, "message": "Declares `express` `^5.1.0` in dependencies; package-lock.json records `^4.18.0`", "evidence": "\"express\": \"^5.1.0\","},
+  {"ruleId": "deps/lockfile", "path": "package.json", "line": 6, "message": "Declares `zod` `^3.23.0` in dependencies; package-lock.json does not list it", "evidence": "\"zod\": \"^3.23.0\""}
+]

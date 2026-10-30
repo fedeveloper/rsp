@@ -1,0 +1,3 @@
+[
+  {"ruleId": "deps/lockfile", "path": "packages/api/package.json", "line": 6, "message": "Declares `pino` `^9.7.0` in dependencies; package-lock.json does not list it", "evidence": "\"pino\": \"^9.7.0\""}
+]

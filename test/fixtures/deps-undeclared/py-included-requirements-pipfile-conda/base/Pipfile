@@ -1,0 +1,5 @@
+[packages]
+rich = "*"
+
+[dev-packages]
+pytest = "*"

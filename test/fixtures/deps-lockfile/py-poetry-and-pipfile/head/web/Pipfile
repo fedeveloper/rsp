@@ -1,0 +1,6 @@
+[packages]
+flask = "*"
+rich = "*"
+
+[dev-packages]
+pytest = "*"

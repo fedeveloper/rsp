@@ -8,6 +8,10 @@ The section of a version is the body of its GitHub Release.
 
 ### Added
 
+- New rule `deps/lockfile` 0.1.0: dependencies added, changed or removed in `package.json`, `pyproject.toml` or `Pipfile` that the lockfile next to them does not match (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`).
+- `deps/undeclared` 0.4.0 reads more Python manifests: files included from requirements files with `-r` or `-c` whatever their name, `Pipfile`, and conda `environment.yml`. More manifests can only remove findings.
+- The sample Python project in the evaluation has a `uv.lock`; both sample projects have lockfile mutations.
+
 - `CHANGELOG.md`, and a test that keeps it in step with the version in `package.json`.
 - Release workflow: pushing a tag `vX.Y.Z` on `main` creates the GitHub Release from this file and moves the major tag `v0` to the same commit.
 - End-to-end tests of the Action on this repository's own pull requests: the Action run from `action.yml`, its report compared with the CLI, and the environment of `test-command` checked on a real runner.
