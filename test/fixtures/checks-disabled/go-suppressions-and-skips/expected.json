@@ -1,0 +1,7 @@
+[
+  {"ruleId": "checks/disabled", "path": "old_test.go", "message": "Test file deleted", "evidence": "deleted: old_test.go"},
+  {"ruleId": "checks/disabled", "path": "server.go", "line": 6, "message": "Added nolint comment", "evidence": "f, _ := os.Open(\"x\") //nolint:errcheck"},
+  {"ruleId": "checks/disabled", "path": "server.go", "line": 7, "message": "Added staticcheck lint:ignore comment", "evidence": "//lint:ignore SA1019 still needed"},
+  {"ruleId": "checks/disabled", "path": "server.go", "line": 8, "message": "Added gosec nosec comment", "evidence": "defer f.Close() // #nosec G307"},
+  {"ruleId": "checks/disabled", "path": "server_test.go", "line": 6, "message": "Added skipped Go test (`Skip`)", "evidence": "t.Skip(\"flaky on CI\")"}
+]

@@ -1,4 +1,5 @@
 import type { DiffContext, DiffLine, FileChange, RawFinding, Rule } from "../types.js";
+import { blankGoStrings, GO_FILE, GO_TEST_FILE, goNonCodeLines } from "./go.js";
 import { blankStrings, JS_FILE, nonCodeLines } from "./js.js";
 import * as python from "./python.js";
 import { codeSpan } from "../text.js";
@@ -29,6 +30,17 @@ const JS_PATTERNS: Pattern[] = [
   { id: "ts-expect-error", label: "@ts-expect-error comment", regex: /(\/\/|\/\*)\s*@ts-expect-error\b/ },
   { id: "biome-ignore", label: "biome-ignore comment", regex: /(\/\/|\/\*)\s*biome-ignore\b/ },
   { id: "coverage-exclusion", label: "coverage exclusion", regex: /(\/\/|\/\*)\s*(istanbul|c8|v8)\s+ignore\b/ },
+];
+
+const GO_PATTERNS: Pattern[] = [
+  { id: "nolint", label: "nolint comment", regex: /\/\/\s*nolint\b/ },
+  { id: "lint-ignore", label: "staticcheck lint:ignore comment", regex: /\/\/\s*lint:(ignore|file-ignore)\b/ },
+  { id: "nosec", label: "gosec nosec comment", regex: /(\/\/|\/\*)\s*#?nosec\b/ },
+];
+
+// Only in _test.go files, where these calls skip the running test.
+const GO_TEST_PATTERNS: Pattern[] = [
+  { id: "go-test-skip", label: "skipped Go test (`Skip`)", regex: /\.(Skip|Skipf|SkipNow)\(/ },
 ];
 
 // Only in test files, where `it.skip(` cannot be anything else.
@@ -73,7 +85,7 @@ const CHECK_KIND: Record<string, string> = {
   ava: "test", playwright: "test", cypress: "test", "test script": "test",
   "node --test": "test", "deno test": "test", "bun test": "test",
   ruff: "lint", flake8: "lint", pylint: "lint", eslint: "lint", oxlint: "lint", biome: "lint",
-  "lint script": "lint",
+  "lint script": "lint", "golangci-lint": "lint", staticcheck: "lint", "go vet": "lint", "go test": "test", gofmt: "format",
   mypy: "types", pyright: "types", tsc: "types", "typecheck script": "types", "type-check script": "types",
   black: "format", isort: "format", prettier: "format",
 };
@@ -81,10 +93,11 @@ const CHECK_KIND: Record<string, string> = {
 // Commands whose removal from CI or package.json scripts switches off a check.
 const CHECK_COMMAND = new RegExp(
   "\\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest" +
-    "|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome)\\b" +
+    "|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome|golangci-lint|staticcheck|gofmt|gosec|govulncheck)\\b" +
     "|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b" +
     // Built-in test runners, e.g. `node --test` or `node --import tsx --test`.
-    "|\\b(node)(?:\\s+-[^\\s&|;]+(?:\\s+[^-\\s&|;][^\\s&|;]*)?)*?\\s+--test\\b|\\b(deno|bun)\\s+test\\b",
+    "|\\b(node)(?:\\s+-[^\\s&|;]+(?:\\s+[^-\\s&|;][^\\s&|;]*)?)*?\\s+--test\\b|\\b(deno|bun)\\s+test\\b" +
+    "|\\bgo\\s+(test|vet)\\b",
 );
 const CHECK_COMMAND_ALL = new RegExp(CHECK_COMMAND.source, "g");
 const COVERAGE_THRESHOLD = /(?:fail_under|fail-under|--cov-fail-under)\s*[=:]?\s*["']?(\d+(?:\.\d+)?)/;
@@ -102,7 +115,7 @@ const ESLINT_CONFIG_FILE = /(^|\/)(eslint\.config\.[cm]?[jt]s|\.eslintrc(\.(json
 
 const KNOWN_KEYS = [
   ...new Set([
-    ...[PYTHON_PATTERNS, JS_PATTERNS, JS_TEST_PATTERNS, WORKFLOW_PATTERNS, TEST_CONFIG_PATTERNS].flat().map((p) => p.id),
+    ...[PYTHON_PATTERNS, JS_PATTERNS, JS_TEST_PATTERNS, GO_PATTERNS, GO_TEST_PATTERNS, WORKFLOW_PATTERNS, TEST_CONFIG_PATTERNS].flat().map((p) => p.id),
     ...[PACKAGE_JSON_PATTERNS, TSCONFIG_PATTERNS, ESLINT_CONFIG_PATTERNS].flat().map((p) => p.id),
     "test-file-deleted", "fewer-assertions", "ci-check-removed", "coverage-threshold-lowered", "script-check-removed",
   ]),
@@ -110,13 +123,13 @@ const KNOWN_KEYS = [
 
 export const checksDisabled: Rule = {
   id: "checks/disabled",
-  version: "0.3.0",
+  version: "0.4.0",
   keys: "a pattern id, e.g. `type-ignore` or `eslint-disable`",
   knownKeys: KNOWN_KEYS,
   description:
     "Checks that were removed or switched off: deleted test files, fewer assertions, skip markers, " +
     "lint and type suppressions, CI steps or package.json scripts removed or allowed to fail, " +
-    "lower coverage thresholds, TypeScript and ESLint checks turned off.",
+    "lower coverage thresholds, TypeScript and ESLint checks turned off; Python, JavaScript/TypeScript and Go.",
   run(ctx) {
     const findings: RawFinding[] = [];
     // Source lines moved between files are not new suppressions.
@@ -125,6 +138,7 @@ export const checksDisabled: Rule = {
       if (file.binary) continue;
       if (file.path.endsWith(".py")) findings.push(...pythonFile(ctx, file, removedSource));
       if (JS_FILE.test(file.path)) findings.push(...jsFile(ctx, file, removedSource));
+      if (GO_FILE.test(file.path)) findings.push(...goFile(ctx, file, removedSource));
       if (WORKFLOW_FILE.test(file.path)) findings.push(...workflowFile(file));
       if (TEST_CONFIG_FILE.test(file.path)) findings.push(...testConfigFile(ctx, file));
       if (file.path.split("/").pop() === "package.json") findings.push(...packageJsonFile(ctx, file));
@@ -161,6 +175,18 @@ function jsFile(ctx: DiffContext, file: FileChange, removed: Map<string, number>
   // Suppressions inside strings or template literals are text, not directives.
   const nonCode = nonCodeLines(ctx.readHead(file.path) ?? "");
   return matchAdded(file, patterns, removed, (l) => (nonCode.has(l.newLine!) ? "" : blankStrings(l.text)));
+}
+
+function goFile(ctx: DiffContext, file: FileChange, removed: Map<string, number>): RawFinding[] {
+  if (file.status === "deleted") {
+    return GO_TEST_FILE.test(file.path)
+      ? [{ key: "test-file-deleted", message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }]
+      : [];
+  }
+  const patterns = GO_TEST_FILE.test(file.path) ? [...GO_PATTERNS, ...GO_TEST_PATTERNS] : GO_PATTERNS;
+  // Directives inside strings or raw strings are text.
+  const nonCode = goNonCodeLines(ctx.readHead(file.path) ?? "");
+  return matchAdded(file, patterns, removed, (l) => (nonCode.has(l.newLine!) ? "" : blankGoStrings(l.text)));
 }
 
 /**
@@ -314,17 +340,20 @@ function isShellLine(line: string): boolean {
  * alone, so switching between `npm test` and `pnpm run test` is no change.
  */
 function checkCommands(line: string): string[] {
-  return [...line.matchAll(CHECK_COMMAND_ALL)].map((m) => m[1] ?? (m[2] ? `${m[2]} script` : m[3] ? "node --test" : `${m[4]} test`));
+  return [...line.matchAll(CHECK_COMMAND_ALL)].map(
+    (m) => m[1] ?? (m[2] ? `${m[2]} script` : m[3] ? "node --test" : m[4] ? `${m[4]} test` : `go ${m[5]}`),
+  );
 }
 
 function isSource(path: string): boolean {
-  return path.endsWith(".py") || JS_FILE.test(path);
+  return path.endsWith(".py") || JS_FILE.test(path) || GO_FILE.test(path);
 }
 
 function kind(command: string): string {
   return CHECK_KIND[command] ?? command;
 }
 
+// Go tests are left out: they assert through t.Error, testify, or helpers of their own, so a count is not reliable.
 function isTestFile(path: string, text: string | undefined): boolean {
   return PYTHON_TEST_FILE.test(path) || isJsTestFile(path, text);
 }

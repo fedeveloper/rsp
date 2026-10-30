@@ -1,0 +1,3 @@
+[
+  {"ruleId": "checks/disabled", "path": ".github/workflows/ci.yml", "message": "Removed CI line running a check (base line 9)", "evidence": "- run: golangci-lint run"}
+]

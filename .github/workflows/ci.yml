@@ -36,7 +36,7 @@ jobs:
       - name: Check the action bundle is up to date
         run: npm run bundle && git diff --exit-code action-dist
       - name: Check the evaluation results are up to date
-        run: npm run eval && git diff --exit-code eval/RESULTS.md eval/RESULTS_JS.md
+        run: npm run eval && git diff --exit-code eval/RESULTS.md eval/RESULTS_JS.md eval/RESULTS_GO.md
 
   # Runs the Action from action.yml on a real runner, as users do, and checks
   # what the unit tests can only simulate: the inputs and outputs, the report
@@ -67,6 +67,7 @@ jobs:
             test/fixtures/**
             eval/project/**
             eval/project-js/**
+            eval/project-go/**
           test-command: >-
             env > "$RUNNER_TEMP/rsp-test-env.txt" &&
             npm ci --ignore-scripts &&
@@ -84,7 +85,7 @@ jobs:
           # Both test runs must have written a report, or tests/delta did not run.
           ls "$RUNNER_TEMP"/rsp-junit/base-0-0.xml "$RUNNER_TEMP"/rsp-junit/head-0-0.xml
           node dist/cli.js check --base "$BASE" --head "$HEAD" --format json \
-            --exclude 'test/fixtures/**' --exclude 'eval/project/**' --exclude 'eval/project-js/**' \
+            --exclude 'test/fixtures/**' --exclude 'eval/project/**' --exclude 'eval/project-js/**' --exclude 'eval/project-go/**' \
             "${junit[@]}" > "$RUNNER_TEMP/cli.json"
           diff <(jq -S . "$REPORT") <(jq -S . "$RUNNER_TEMP/cli.json")
           [ "$FINDINGS" = "$(jq '.findings | length' "$REPORT")" ]

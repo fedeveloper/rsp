@@ -4,7 +4,7 @@
 //
 // The corpora in this repository are the sample Python project in
 // eval/project (eval/RESULTS.md) and the sample TypeScript service in
-// eval/project-js (eval/RESULTS_JS.md). RSP_EVAL_EXTRA adds corpora kept outside the repository,
+// eval/project-js (eval/RESULTS_JS.md) and the sample Go service in eval/project-go (eval/RESULTS_GO.md). RSP_EVAL_EXTRA adds corpora kept outside the repository,
 // such as real applications whose code should not be copied here: a list of
 // files separated by the path delimiter, each with a default export that
 // receives the mutation helpers and returns { repo, commit, describe,
@@ -19,6 +19,7 @@ import { ALL_RULES } from "../src/rules/index.js";
 import type { Finding } from "../src/types.js";
 import { VERSION } from "../src/version.js";
 import { makeRepoFromTrees } from "../test/helpers.js";
+import { MUTATIONS_GO } from "./mutations-go.js";
 import { MUTATIONS_JS } from "./mutations-js.js";
 import * as helpers from "./mutations.js";
 import { type Files, MUTATIONS, type Mutation } from "./mutations.js";
@@ -158,6 +159,13 @@ const corpora: Corpus[] = [
     files: readTree(join(import.meta.dirname, "project-js")),
     mutations: MUTATIONS_JS,
     results: join(import.meta.dirname, "RESULTS_JS.md"),
+  },
+  {
+    describe: "the sample Go service in `eval/project-go`",
+    source: "eval/mutations-go.ts",
+    files: readTree(join(import.meta.dirname, "project-go")),
+    mutations: MUTATIONS_GO,
+    results: join(import.meta.dirname, "RESULTS_GO.md"),
   },
 ];
 for (const path of (process.env.RSP_EVAL_EXTRA ?? "").split(delimiter).filter(Boolean)) {

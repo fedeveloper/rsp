@@ -1,0 +1,4 @@
+[
+  {"ruleId": "deps/undeclared", "path": "main.go", "line": 9, "message": "Imports `github.com/google/uuid`, not required in go.mod", "evidence": "\"github.com/google/uuid\""},
+  {"ruleId": "deps/undeclared", "path": "main.go", "line": 11, "message": "Imports `gopkg.in/yaml.v3`, not required in go.mod", "evidence": "y \"gopkg.in/yaml.v3\""}
+]

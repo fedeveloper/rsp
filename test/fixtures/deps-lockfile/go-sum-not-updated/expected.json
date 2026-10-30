@@ -1,0 +1,4 @@
+[
+  {"ruleId": "deps/lockfile", "path": "go.mod", "line": 6, "message": "Requires `github.com/google/uuid` `v1.6.0` in go.mod; go.sum has no line for it", "evidence": "github.com/google/uuid v1.6.0"},
+  {"ruleId": "deps/lockfile", "path": "go.mod", "line": 8, "message": "Requires `golang.org/x/text` `v0.15.0` in go.mod; go.sum has no line for it", "evidence": "golang.org/x/text v0.15.0"}
+]

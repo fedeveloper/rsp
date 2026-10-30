@@ -14,5 +14,5 @@
     "types": ["node"]
   },
   "include": ["src", "test", "eval", "scripts", "docs"],
-  "exclude": ["test/fixtures", "eval/project", "eval/project-js", "eval/.cache"]
+  "exclude": ["test/fixtures", "eval/project", "eval/project-js", "eval/project-go", "eval/.cache"]
 }

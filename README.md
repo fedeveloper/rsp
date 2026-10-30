@@ -92,7 +92,7 @@ cd your-repo
 rsp check --base origin/main
 ```
 
-RSP needs Node 22 or later and git. It supports Python and JavaScript/TypeScript (Node and front-end code); the CI checks work for any GitHub Actions workflow.
+RSP needs Node 22 or later and git. It supports Python, JavaScript/TypeScript (Node and front-end code) and Go; the CI checks work for any GitHub Actions workflow.
 
 ## What RSP reports
 
@@ -108,12 +108,14 @@ Checks that were removed or switched off.
 | `pytest.skip()` called inside a test | `pytest.skip("todo")` | `pytest-skip-call` |
 | unittest skips | `@unittest.skip`, `@unittest.skipIf`, `@unittest.expectedFailure` | `unittest-skip` |
 | JS/TS skipped or focused tests | `it.skip`, `test.skipIf`, `xit`, `describe.only` | `test-skip`, `test-only` |
+| Go tests skipped (in `_test.go` files) | `t.Skip("flaky")`, `t.SkipNow()` | `go-test-skip` |
 | Python suppressions | `# noqa`, `# type: ignore`, `# pylint: disable`, `# nosec` | `noqa`, `type-ignore`, `pylint-disable`, `nosec` |
 | Coverage exclusions | `# pragma: no cover`, `/* istanbul ignore next */`, `c8 ignore`, `v8 ignore` | `coverage-exclusion` |
 | JS/TS suppressions | `eslint-disable`, `@ts-ignore`, `@ts-nocheck`, `@ts-expect-error`, `biome-ignore` | `eslint-disable`, `ts-ignore`, `ts-nocheck`, `ts-expect-error`, `biome-ignore` |
+| Go suppressions | `//nolint`, `//lint:ignore`, `// #nosec` | `nolint`, `lint-ignore`, `nosec` |
 | Test files deleted | `tests/test_store.py` removed | `test-file-deleted` |
 | Fewer assertions across the changed tests | 12 `assert` before, 9 after | `fewer-assertions` |
-| A CI line running a checker removed | `- run: mypy src` deleted | `ci-check-removed` |
+| A CI line running a checker removed | `- run: mypy src` or `- run: golangci-lint run` deleted | `ci-check-removed` |
 | CI steps allowed to fail | `continue-on-error: true`, `pytest \|\| true`, `\|\| exit 0`, `if: false` | `continue-on-error`, `or-true`, `or-exit-0`, `if-false` |
 | pytest told to skip tests | `--deselect`, `--ignore` in `addopts` | `pytest-exclude-option` |
 | Lower coverage threshold | `fail_under = 85` → `60` | `coverage-threshold-lowered` |
@@ -121,16 +123,17 @@ Checks that were removed or switched off.
 | TypeScript strictness turned off | `"strict": false` in tsconfig | `ts-strict-off` |
 | ESLint rules turned off | `"no-unused-vars": "off"` | `eslint-rule-off` |
 
-It deliberately ignores lines moved between files, tests moved to another file, a checker replaced by one of the same kind (eslint by oxlint, jest by vitest, flake8 by ruff), `@ts-expect-error` inside test files (where it is the assertion), and helper files that live in test folders but contain no tests.
+It deliberately ignores lines moved between files, tests moved to another file, a checker replaced by one of the same kind (eslint by oxlint, jest by vitest, flake8 by ruff), `@ts-expect-error` inside test files (where it is the assertion), and helper files that live in test folders but contain no tests. Go test files are not counted for fewer assertions, because Go tests assert through `t.Error`, testify or helpers of their own.
 
 ### `deps/undeclared`
 
-Imports added by the diff whose package is not declared in a dependency manifest. The key is the imported module (Python) or package (JavaScript).
+Imports added by the diff whose package is not declared in a dependency manifest. The key is the imported module (Python), package (JavaScript) or import path (Go).
 
 - **Python** imports are checked against `pyproject.toml` (PEP 621 dependencies and optional dependencies, PEP 735 dependency groups, Poetry, PDM and uv), `requirements*.txt` and any file they include with `-r` or `-c`, `Pipfile`, conda `environment.yml`, `setup.cfg` and literal lists in `setup.py`. Import names are mapped to distribution names where they differ (`yaml` is `PyYAML`, `sklearn` is `scikit-learn`).
 - **JavaScript/TypeScript** `import`, `export ... from` and `require()` are checked against every `package.json` between the file and the repository root, including `@types/` packages.
+- **Go** import paths are checked against the `require` and `replace` directives of the nearest `go.mod`; a subpackage of a required module is covered by it.
 
-It ignores the standard library and Node built-ins, the repository's own modules and workspace packages, relative imports, tsconfig path aliases, imports under `if TYPE_CHECKING:` or inside `try`/`except` (Python) or `try`/`catch` (JS), dynamic `import()`, code inside strings and template literals, and repositories with no manifest at all.
+It ignores the standard library and Node built-ins, the repository's own modules, workspace packages and Go modules, `vendor/` and `testdata/`, relative imports, tsconfig path aliases, imports under `if TYPE_CHECKING:` or inside `try`/`except` (Python) or `try`/`catch` (JS), dynamic `import()`, code inside strings and template literals, and repositories with no manifest at all.
 
 ### `deps/lockfile`
 
@@ -143,6 +146,7 @@ Dependencies added, changed or removed in a manifest by the diff that the lockfi
 | `yarn.lock` (classic and Berry) | an entry for `name@range` |
 | `uv.lock` | the project's `requires-dist` and `requires-dev` |
 | `poetry.lock`, `pdm.lock`, `Pipfile.lock` | the package is locked at all |
+| `go.sum` | a line for the required module at the required version |
 
 ```text
 deps/lockfile  package.json:14  Declares `zod` `^3.23.0` in dependencies; package-lock.json does not list it
@@ -158,6 +162,7 @@ Environment variables read by literal name in added code that are missing from t
 
 - **Python**: `os.getenv("X")`, `os.environ["X"]`, `os.environ.get("X")`.
 - **JavaScript/TypeScript**: `process.env.X`, `process.env["X"]`, destructuring from `process.env`, `import.meta.env.X`, `Deno.env.get("X")`, `Bun.env.X`.
+- **Go**: `os.Getenv("X")`, `os.LookupEnv("X")`, `syscall.Getenv("X")`.
 
 It ignores variables set by the OS, Node, Vite or CI (`HOME`, `NODE_ENV`, `import.meta.env.MODE`, `GITHUB_*` and similar), writes to the environment, reads moved from elsewhere in the repository, and repositories without an example file: no example file means there is no convention to keep up.
 
@@ -464,8 +469,9 @@ Passing its own tests proves that RSP is consistent, not that its rules work on 
 2. **Labelled mutations** (`npm run eval`). Risky and benign changes are applied to each corpus; each risky change must be reported by exactly the expected rules and each benign one by none. CI fails if the results change.
    - A small sample Python project: [eval/RESULTS.md](eval/RESULTS.md).
    - A small TypeScript web service: [eval/RESULTS_JS.md](eval/RESULTS_JS.md).
+   - A small Go service: [eval/RESULTS_GO.md](eval/RESULTS_GO.md).
    - Corpora built on real applications whose code should not be copied here are kept outside the repository and loaded with `RSP_EVAL_EXTRA=<file>` (see `eval/run.ts`). Their results are not part of CI.
-3. **Real history** (`eval/real-history.ts`). Every rule runs on about 100 recent commits of public projects, and each line-level finding is checked against git independently of the rules: the reported line holds the evidence, the line occurs more often after the commit than before, and for signatures the definition really changed. Python: flask, requests, httpx, fastapi, click ([eval/REAL_HISTORY.md](eval/REAL_HISTORY.md)). JavaScript/TypeScript: express, axios, fastify, vite, outline ([eval/REAL_HISTORY_JS.md](eval/REAL_HISTORY_JS.md)). Every false fact found this way was fixed and became a golden fixture.
+3. **Real history** (`eval/real-history.ts`). Every rule runs on about 100 recent commits of public projects, and each line-level finding is checked against git independently of the rules: the reported line holds the evidence, the line occurs more often after the commit than before, and for signatures the definition really changed. Python: flask, requests, httpx, fastapi, click ([eval/REAL_HISTORY.md](eval/REAL_HISTORY.md)). JavaScript/TypeScript: express, axios, fastify, vite, outline ([eval/REAL_HISTORY_JS.md](eval/REAL_HISTORY_JS.md)). Go: cobra, gin, chi, testify, viper ([eval/REAL_HISTORY_GO.md](eval/REAL_HISTORY_GO.md)). Every false fact found this way was fixed and became a golden fixture.
 4. **Action tests** against a fake GitHub API: comment created, updated and cleared, read-only tokens, `fail-on`, invalid configuration, the test command at base and head with a flaky rerun, and one run from the committed bundle. On every pull request of RSP itself, an end-to-end job also runs the Action from `action.yml` on a real runner, compares its report with the CLI on the same commits and checks that the test command saw no tokens.
 
 ### Patches written by coding agents
@@ -503,7 +509,7 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 - **RSP is not a reviewer.** No findings does not mean a change is correct, only that none of these specific things happened.
 - **Bounded on purpose.** Rules use line-level parsing tuned for precision, not full parsers. Unusual syntax is more likely to be missed than misreported.
-- **Two ecosystems.** Python and JavaScript/TypeScript. `deps/lockfile` checks that the lockfile records what the manifest declares, not that the locked versions satisfy the ranges. CI checks cover GitHub Actions workflows.
+- **Three ecosystems.** Python, JavaScript/TypeScript and Go. For Go, the interface rules (`interface/*`) do not run yet. `deps/lockfile` checks that the lockfile records what the manifest declares, not that the locked versions satisfy the ranges. CI checks cover GitHub Actions workflows.
 - **Interface changes are about what callers write.** Parameters, TypeScript type fields, return annotations, imported names and literal routes are compared; behaviour, Python class attributes and routes built at run time are not, and "a test mentions it" is a name match, not coverage. Coverage is read only when you give a report.
 - **Test delta costs a second test run** and is only as good as the JUnit report: tests that the runner does not report, such as doctests in some setups, are not seen.
 
@@ -539,7 +545,7 @@ A warning implies the change is wrong. "Added pytest skip marker" is simply true
 npm ci
 npm run typecheck
 npm test
-npm run eval      # labelled mutations on eval/project and eval/project-js; RSP_EVAL_EXTRA=<file> adds a corpus kept outside the repository
+npm run eval      # labelled mutations on eval/project, eval/project-js and eval/project-go; RSP_EVAL_EXTRA=<file> adds a corpus kept outside the repository
 npm run bundle    # rebuild action-dist/ after changing src/; CI checks it is up to date
 node --import tsx eval/real-history.ts --commits 100 --out eval/REAL_HISTORY.md <repo-dirs>
 node --import tsx eval/swe-bench.ts
