@@ -1089,86 +1089,16 @@ function cmp(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-// src/coverage.ts
-function parseCoverage(text) {
-  const body = text.replace(/^﻿/, "");
-  if (/^SF:/m.test(body)) return parseLcov(body);
-  if (/<coverage\b/.test(body)) return parseCobertura(body);
-  return void 0;
-}
-function parseLcov(text) {
-  const out = /* @__PURE__ */ new Map();
-  let lines;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line.startsWith("SF:")) {
-      const file = line.slice(3);
-      lines = out.get(file) ?? /* @__PURE__ */ new Map();
-      out.set(file, lines);
-    } else if (line === "end_of_record") {
-      lines = void 0;
-    } else if (lines && line.startsWith("DA:")) {
-      const [n, hits] = line.slice(3).split(",");
-      add(lines, Number(n), Number(hits));
-    }
-  }
-  return out;
-}
-var ATTR = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
-function attrs(tag) {
-  const out = /* @__PURE__ */ new Map();
-  for (const a of tag.matchAll(ATTR)) out.set(a[1], (a[3] ?? a[4] ?? "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'"));
-  return out;
-}
-function parseCobertura(xml) {
-  const out = /* @__PURE__ */ new Map();
-  const text = xml.replace(/<!--[\s\S]*?-->/g, "");
-  const sources = [...text.matchAll(/<source>([^<]*)<\/source>/g)].map((m) => m[1].trim()).filter(Boolean);
-  for (const cls of text.matchAll(/<class\b([^>]*)>([\s\S]*?)<\/class>/g)) {
-    const filename = attrs(cls[1]).get("filename");
-    if (!filename) continue;
-    const name = filename.startsWith("/") || sources.length !== 1 ? filename : `${sources[0].replace(/\/$/, "")}/${filename}`;
-    const lines = out.get(name) ?? /* @__PURE__ */ new Map();
-    out.set(name, lines);
-    for (const l of cls[2].matchAll(/<line\b([^>]*?)\/?>/g)) {
-      const a = attrs(l[1]);
-      add(lines, Number(a.get("number")), Number(a.get("hits")));
-    }
-  }
-  return out;
-}
-function add(lines, n, hits) {
-  if (!Number.isInteger(n) || n < 1 || !Number.isFinite(hits)) return;
-  lines.set(n, Math.max(lines.get(n) ?? 0, hits));
-}
-function coverageByRepoPath(reports, repoFiles) {
-  const out = /* @__PURE__ */ new Map();
-  for (const report of reports) {
-    for (const [written, lines] of report) {
-      const path = written.replace(/\\/g, "/").replace(/^\.\//, "");
-      let best;
-      for (const f of repoFiles) {
-        if ((path === f || path.endsWith(`/${f}`)) && (!best || f.length > best.length)) best = f;
-      }
-      if (!best) continue;
-      const merged = out.get(best) ?? /* @__PURE__ */ new Map();
-      out.set(best, merged);
-      for (const [n, hits] of lines) add(merged, n, hits);
-    }
-  }
-  return out;
-}
-
 // src/junit.ts
 var TESTCASE = /<testcase\b((?:[^>"']|"[^"]*"|'[^']*')*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
-var ATTR2 = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
+var ATTR = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
 function parseReport(xml) {
   const results = /* @__PURE__ */ new Map();
   const retried = /* @__PURE__ */ new Set();
-  const text = xml.replace(/^\uFEFF/, "").replace(/<!--[\s\S]*?-->/g, "");
+  const text = withoutComments(xml.replace(/^\uFEFF/, ""));
   for (const m of text.matchAll(TESTCASE)) {
     const attrs2 = /* @__PURE__ */ new Map();
-    for (const a of m[1].matchAll(ATTR2)) attrs2.set(a[1], unescape(a[3] ?? a[4] ?? ""));
+    for (const a of m[1].matchAll(ATTR)) attrs2.set(a[1], unescapeXml(a[3] ?? a[4] ?? ""));
     const name = attrs2.get("name");
     if (!name) continue;
     const body = (m[3] ?? "").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
@@ -1204,8 +1134,95 @@ function combine(a, b) {
   if (a === "failed" || b === "failed") return "failed";
   return "skipped";
 }
-function unescape(s) {
-  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16))).replace(/&amp;/g, "&");
+function withoutComments(xml) {
+  let out = "";
+  let at = 0;
+  for (; ; ) {
+    const open = xml.indexOf("<!--", at);
+    if (open < 0) return out + xml.slice(at);
+    out += xml.slice(at, open);
+    const close = xml.indexOf("-->", open + 4);
+    if (close < 0) return out;
+    at = close + 3;
+  }
+}
+function unescapeXml(s) {
+  return s.replace(/&(lt|gt|quot|apos|amp|#\d+|#x[0-9a-f]+);/gi, (m, e) => {
+    const named = { lt: "<", gt: ">", quot: '"', apos: "'", amp: "&" };
+    if (e[0] !== "#") return named[e.toLowerCase()] ?? m;
+    const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+    return code <= 1114111 ? String.fromCodePoint(code) : m;
+  });
+}
+
+// src/coverage.ts
+function parseCoverage(text) {
+  const body = text.replace(/^﻿/, "");
+  if (/^SF:/m.test(body)) return parseLcov(body);
+  if (/<coverage\b/.test(body)) return parseCobertura(body);
+  return void 0;
+}
+function parseLcov(text) {
+  const out = /* @__PURE__ */ new Map();
+  let lines;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("SF:")) {
+      const file = line.slice(3);
+      lines = out.get(file) ?? /* @__PURE__ */ new Map();
+      out.set(file, lines);
+    } else if (line === "end_of_record") {
+      lines = void 0;
+    } else if (lines && line.startsWith("DA:")) {
+      const [n, hits] = line.slice(3).split(",");
+      add(lines, Number(n), Number(hits));
+    }
+  }
+  return out;
+}
+var ATTR2 = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
+function attrs(tag) {
+  const out = /* @__PURE__ */ new Map();
+  for (const a of tag.matchAll(ATTR2)) out.set(a[1], unescapeXml(a[3] ?? a[4] ?? ""));
+  return out;
+}
+function parseCobertura(xml) {
+  const out = /* @__PURE__ */ new Map();
+  const text = withoutComments(xml);
+  const sources = [...text.matchAll(/<source>([^<]*)<\/source>/g)].map((m) => m[1].trim()).filter(Boolean);
+  for (const cls of text.matchAll(/<class\b([^>]*)>([\s\S]*?)<\/class>/g)) {
+    const filename = attrs(cls[1]).get("filename");
+    if (!filename) continue;
+    const name = filename.startsWith("/") || sources.length !== 1 ? filename : `${sources[0].replace(/\/$/, "")}/${filename}`;
+    const lines = out.get(name) ?? /* @__PURE__ */ new Map();
+    out.set(name, lines);
+    for (const l of cls[2].matchAll(/<line\b([^>]*?)\/?>/g)) {
+      const a = attrs(l[1]);
+      add(lines, Number(a.get("number")), Number(a.get("hits")));
+    }
+  }
+  return out;
+}
+function add(lines, n, hits) {
+  if (!Number.isInteger(n) || n < 1 || !Number.isFinite(hits)) return;
+  lines.set(n, Math.max(lines.get(n) ?? 0, hits));
+}
+function coverageByRepoPath(reports, repoFiles) {
+  const out = /* @__PURE__ */ new Map();
+  for (const report of reports) {
+    for (const [written, lines] of report) {
+      const path = written.replace(/\\/g, "/").replace(/^\.\//, "");
+      let best;
+      for (const f of repoFiles) {
+        if ((path === f || path.endsWith(`/${f}`)) && (!best || f.length > best.length)) best = f;
+      }
+      if (!best) continue;
+      const merged = out.get(best) ?? /* @__PURE__ */ new Map();
+      out.set(best, merged);
+      for (const [n, hits] of lines) add(merged, n, hits);
+    }
+  }
+  return out;
 }
 
 // src/rules/js.ts

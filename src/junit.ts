@@ -33,10 +33,10 @@ export function parseJUnit(xml: string): Map<string, TestStatus> {
 export function parseReport(xml: string): ParsedReport {
   const results = new Map<string, TestStatus>();
   const retried = new Set<string>();
-  const text = xml.replace(/^\uFEFF/, "").replace(/<!--[\s\S]*?-->/g, "");
+  const text = withoutComments(xml.replace(/^\uFEFF/, ""));
   for (const m of text.matchAll(TESTCASE)) {
     const attrs = new Map<string, string>();
-    for (const a of m[1]!.matchAll(ATTR)) attrs.set(a[1]!, unescape(a[3] ?? a[4] ?? ""));
+    for (const a of m[1]!.matchAll(ATTR)) attrs.set(a[1]!, unescapeXml(a[3] ?? a[4] ?? ""));
     const name = attrs.get("name");
     if (!name) continue;
     const body = (m[3] ?? "").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
@@ -80,13 +80,27 @@ function combine(a: TestStatus | undefined, b: TestStatus): TestStatus {
   return "skipped";
 }
 
-function unescape(s: string): string {
-  return s
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
-    .replace(/&amp;/g, "&");
+/** The XML with its comments removed; an unclosed comment runs to the end. */
+export function withoutComments(xml: string): string {
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const open = xml.indexOf("<!--", at);
+    if (open < 0) return out + xml.slice(at);
+    out += xml.slice(at, open);
+    const close = xml.indexOf("-->", open + 4);
+    if (close < 0) return out;
+    at = close + 3;
+  }
 }
+
+/** Replaces XML entities in one pass, so `&amp;lt;` stays `&lt;`. */
+export function unescapeXml(s: string): string {
+  return s.replace(/&(lt|gt|quot|apos|amp|#\d+|#x[0-9a-f]+);/gi, (m, e: string) => {
+    const named: Record<string, string> = { lt: "<", gt: ">", quot: '"', apos: "'", amp: "&" };
+    if (e[0] !== "#") return named[e.toLowerCase()] ?? m;
+    const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+    return code <= 0x10ffff ? String.fromCodePoint(code) : m;
+  });
+}
+

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
 import { check, toMarkdown } from "../src/index.js";
-import { mergeRuns, parseJUnit, parseReport } from "../src/junit.js";
+import { mergeRuns, parseJUnit, parseReport, unescapeXml, withoutComments } from "../src/junit.js";
 import { makeFixtureRepo } from "./helpers.js";
 
 // As written by pytest --junitxml.
@@ -175,4 +175,9 @@ it("lists flaky tests in the report and the Markdown, not as findings", () => {
     repo.cleanup();
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+it("unescapes entities once and drops comments, closed or not", () => {
+  assert.equal(unescapeXml("a&amp;lt;b &lt;c&gt; &#65;&#x42; &bogus;"), "a&lt;b <c> AB &bogus;");
+  assert.equal(withoutComments("a<!-- x -->b<!--<!-- y -->c<!-- open"), "abc");
 });

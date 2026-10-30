@@ -2,6 +2,8 @@
 // coverage.py's `coverage lcov`) and Cobertura XML (`coverage.xml`, written by
 // coverage.py, pytest-cov, Jest and Vitest). Only hits per line are read.
 
+import { unescapeXml, withoutComments } from "./junit.js";
+
 /** Hits by line number, by file path as the report writes it. */
 export type LineHits = Map<string, Map<number, number>>;
 
@@ -35,13 +37,13 @@ const ATTR = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
 
 function attrs(tag: string): Map<string, string> {
   const out = new Map<string, string>();
-  for (const a of tag.matchAll(ATTR)) out.set(a[1]!, (a[3] ?? a[4] ?? "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'"));
+  for (const a of tag.matchAll(ATTR)) out.set(a[1]!, unescapeXml(a[3] ?? a[4] ?? ""));
   return out;
 }
 
 function parseCobertura(xml: string): LineHits {
   const out: LineHits = new Map();
-  const text = xml.replace(/<!--[\s\S]*?-->/g, "");
+  const text = withoutComments(xml);
   const sources = [...text.matchAll(/<source>([^<]*)<\/source>/g)].map((m) => m[1]!.trim()).filter(Boolean);
   for (const cls of text.matchAll(/<class\b([^>]*)>([\s\S]*?)<\/class>/g)) {
     const filename = attrs(cls[1]!).get("filename");
