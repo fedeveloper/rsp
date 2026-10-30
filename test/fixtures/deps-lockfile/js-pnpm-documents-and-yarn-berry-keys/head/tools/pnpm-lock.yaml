@@ -1,0 +1,32 @@
+---
+lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    configDependencies: {}
+    packageManagerDependencies:
+      pnpm:
+        specifier: 12.14.0
+        version: 12.14.0
+
+packages:
+
+  '@pnpm/exe@12.14.0':
+    resolution: {integrity: sha512-x}
+
+---
+lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    devDependencies:
+      oxlint:
+        specifier: ^1.88.0
+        version: 1.88.0
+
+packages:
+
+  oxlint@1.88.0:
+    resolution: {integrity: sha512-y}

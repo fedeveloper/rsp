@@ -1,0 +1,4 @@
+[
+  {"ruleId": "deps/lockfile", "path": "svc/pyproject.toml", "line": 9, "message": "Declares `httpx` in pyproject.toml; poetry.lock does not list it", "evidence": "httpx = \"^0.27\""},
+  {"ruleId": "deps/lockfile", "path": "web/Pipfile", "line": 3, "message": "Declares `rich` in Pipfile; Pipfile.lock does not list it", "evidence": "rich = \"*\""}
+]

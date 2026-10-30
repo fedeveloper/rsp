@@ -1,0 +1,12 @@
+[[package]]
+name = "requests"
+version = "2.32.3"
+
+[[package]]
+name = "pyyaml"
+version = "6.0.2"
+
+[metadata]
+lock-version = "2.0"
+python-versions = "^3.11"
+content-hash = "abc"

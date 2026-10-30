@@ -96,7 +96,7 @@ RSP needs Node 22 or later and git. It supports Python and JavaScript/TypeScript
 
 ## What RSP reports
 
-There are five rules. Each looks at the diff between the merge-base of the pull request and its head, and each finding has a **key**, which is what you name in `.rsp.toml` to accept that kind of finding (see [Configuration](#configuration-rsptoml)). `rsp --list-rules` prints the same information.
+There are six rules. Each looks at the diff between the merge-base of the pull request and its head, and each finding has a **key**, which is what you name in `.rsp.toml` to accept that kind of finding (see [Configuration](#configuration-rsptoml)). `rsp --list-rules` prints the same information.
 
 ### `checks/disabled`
 
@@ -127,10 +127,30 @@ It deliberately ignores lines moved between files, tests moved to another file, 
 
 Imports added by the diff whose package is not declared in a dependency manifest. The key is the imported module (Python) or package (JavaScript).
 
-- **Python** imports are checked against `pyproject.toml` (PEP 621 dependencies and optional dependencies, PEP 735 dependency groups, Poetry, PDM and uv), `requirements*.txt`, `setup.cfg` and literal lists in `setup.py`. Import names are mapped to distribution names where they differ (`yaml` is `PyYAML`, `sklearn` is `scikit-learn`).
+- **Python** imports are checked against `pyproject.toml` (PEP 621 dependencies and optional dependencies, PEP 735 dependency groups, Poetry, PDM and uv), `requirements*.txt` and any file they include with `-r` or `-c`, `Pipfile`, conda `environment.yml`, `setup.cfg` and literal lists in `setup.py`. Import names are mapped to distribution names where they differ (`yaml` is `PyYAML`, `sklearn` is `scikit-learn`).
 - **JavaScript/TypeScript** `import`, `export ... from` and `require()` are checked against every `package.json` between the file and the repository root, including `@types/` packages.
 
 It ignores the standard library and Node built-ins, the repository's own modules and workspace packages, relative imports, tsconfig path aliases, imports under `if TYPE_CHECKING:` or inside `try`/`except` (Python) or `try`/`catch` (JS), dynamic `import()`, code inside strings and template literals, and repositories with no manifest at all.
+
+### `deps/lockfile`
+
+Dependencies added, changed or removed in a manifest by the diff that the lockfile next to it does not match. This is what happens when a dependency is added to `package.json` or `pyproject.toml` by hand instead of through the package manager. The key is the package name.
+
+| Lockfile | Compared with the manifest |
+| --- | --- |
+| `package-lock.json`, `npm-shrinkwrap.json` (v2, v3) | the lockfile's copy of the package's dependency ranges (`packages[""]`, or the workspace's entry) |
+| `pnpm-lock.yaml` (v6, v9) | `importers` and their `specifier`s |
+| `yarn.lock` (classic and Berry) | an entry for `name@range` |
+| `uv.lock` | the project's `requires-dist` and `requires-dev` |
+| `poetry.lock`, `pdm.lock`, `Pipfile.lock` | the package is locked at all |
+
+```text
+deps/lockfile  package.json:14  Declares `zod` `^3.23.0` in dependencies; package-lock.json does not list it
+deps/lockfile  package.json:9   Declares `express` `^5.1.0` in dependencies; package-lock.json records `^4.18.0`
+deps/lockfile  pyproject.toml   Removes `pydantic` from pyproject.toml; uv.lock still lists it
+```
+
+The rule only looks at lockfiles that existed at base, in the manifest's directory or the nearest one above it, and that it can read. It stays silent for `package-lock.json` v1, for a directory with two kinds of lockfile, for local ranges (`workspace:`, `file:`, git URLs), for manifests that were only reformatted, and for removals from lockfiles that list every installed package rather than the project's own requirements (Yarn, Poetry, PDM, Pipfile).
 
 ### `env/missing-example`
 
@@ -414,7 +434,7 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 - **RSP is not a reviewer.** No findings does not mean a change is correct, only that none of these specific things happened.
 - **Bounded on purpose.** Rules use line-level parsing tuned for precision, not full parsers. Unusual syntax is more likely to be missed than misreported.
-- **Two ecosystems.** Python and JavaScript/TypeScript. CI checks cover GitHub Actions workflows.
+- **Two ecosystems.** Python and JavaScript/TypeScript. `deps/lockfile` checks that the lockfile records what the manifest declares, not that the locked versions satisfy the ranges. CI checks cover GitHub Actions workflows.
 - **Interface changes are about parameters.** Return types, behaviour and class attributes are not compared, and "a test mentions it" is a name match, not coverage.
 - **Test delta costs a second test run** and is only as good as the JUnit report: tests that the runner does not report, such as doctests in some setups, are not seen.
 

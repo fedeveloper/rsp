@@ -1,0 +1,7 @@
+{
+  "name": "app",
+  "version": "1.0.0",
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.5.0"
+  }
+}

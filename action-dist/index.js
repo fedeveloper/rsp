@@ -685,9 +685,9 @@ function validateTablePeek(ctx, peek, ptr) {
   if (peek === null || ctx.uk === 2)
     TomlError.x(peek === null ? "trying to redefine an already defined table or value" : "document contains an unsafe property", ctx, ptr);
 }
-function parse(toml, options = {}) {
+function parse(toml2, options = {}) {
   let ctx = {
-    s: toml,
+    s: toml2,
     p: 0,
     d: options.maxDepth ?? 1e3,
     bi: options.integersAsBigInt ?? false,
@@ -700,12 +700,12 @@ function parse(toml, options = {}) {
   let skipping = false;
   let tbl = res;
   let m = meta;
-  if (toml.charCodeAt(0) === 65279)
+  if (toml2.charCodeAt(0) === 65279)
     ctx.p++;
   skipVoid(ctx);
-  while (ctx.p < toml.length) {
-    if (toml.charCodeAt(ctx.p) === 91) {
-      let isTableArray = toml.charCodeAt(++ctx.p) === 91;
+  while (ctx.p < toml2.length) {
+    if (toml2.charCodeAt(ctx.p) === 91) {
+      let isTableArray = toml2.charCodeAt(++ctx.p) === 91;
       tmp = ctx.p += +isTableArray;
       skipping = false;
       let k = parseKey(
@@ -714,7 +714,7 @@ function parse(toml, options = {}) {
         /* ] */
       );
       if (isTableArray) {
-        if (toml.charCodeAt(ctx.p) !== 93) {
+        if (toml2.charCodeAt(ctx.p) !== 93) {
           TomlError.x("expected end of table array declaration", ctx);
         }
         ctx.p++;
@@ -753,7 +753,7 @@ function parse(toml, options = {}) {
         p[1][p[0]] = v;
     }
     skipVoid(ctx, true);
-    if (ctx.p < toml.length && (tmp = toml.charCodeAt(ctx.p)) !== 10 && (tmp !== 13 || toml.charCodeAt(ctx.p + 1) !== 10)) {
+    if (ctx.p < toml2.length && (tmp = toml2.charCodeAt(ctx.p)) !== 10 && (tmp !== 13 || toml2.charCodeAt(ctx.p + 1) !== 10)) {
       TomlError.x("each key-value declaration must be followed by an end-of-line", ctx);
     }
     skipVoid(ctx);
@@ -1762,6 +1762,328 @@ function threshold(text) {
   return m ? Number(m[1]) : void 0;
 }
 
+// src/rules/lockfiles.ts
+var JS_DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+function jsDeclared(json) {
+  const out = /* @__PURE__ */ new Map();
+  for (const field of JS_DEPENDENCY_FIELDS) {
+    const deps = json[field];
+    const map = /* @__PURE__ */ new Map();
+    if (deps && typeof deps === "object" && !Array.isArray(deps)) {
+      for (const [name, range] of Object.entries(deps)) if (typeof range === "string") map.set(name, range);
+    }
+    out.set(field, map);
+  }
+  return out;
+}
+function parseJson(text) {
+  try {
+    const value = JSON.parse(text ?? "");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function npmLock(text, dir) {
+  const json = parseJson(text);
+  if (!json || json.lockfileVersion !== 2 && json.lockfileVersion !== 3) return void 0;
+  const packages = json.packages;
+  if (!packages || typeof packages !== "object") return void 0;
+  const entry = packages[dir];
+  if (!entry || typeof entry !== "object") return void 0;
+  const declared = jsDeclared(entry);
+  return { fields: JS_DEPENDENCY_FIELDS, range: (field, name) => declared.get(field).get(name), mirrors: true };
+}
+function pnpmLock(text, dir) {
+  const version = /^lockfileVersion:\s*'?"?(\d+)/m.exec(text)?.[1];
+  if (version !== "6" && version !== "9") return void 0;
+  const lines = text.split("\n");
+  const want = dir === "" ? "." : dir;
+  const ranges = /* @__PURE__ */ new Map();
+  let found = false;
+  for (let start = lines.indexOf("importers:"); start >= 0; start = lines.indexOf("importers:", start + 1)) {
+    let inImporter = false;
+    let field;
+    let name;
+    for (let i = start + 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.trim() === "") continue;
+      if (/^\S/.test(line)) break;
+      const indent = line.length - line.trimStart().length;
+      const key = unquote2(line.trim().replace(/:.*$/, ""));
+      const value = line.includes(":") ? line.slice(line.indexOf(":") + 1).trim() : "";
+      if (indent === 2) {
+        inImporter = key === want;
+        found ||= inImporter;
+        field = void 0;
+      } else if (!inImporter) {
+        continue;
+      } else if (indent === 4) {
+        field = JS_DEPENDENCY_FIELDS.includes(key) ? key : void 0;
+      } else if (indent === 6 && field) {
+        name = key;
+      } else if (indent === 8 && field && name && key === "specifier") {
+        if (!ranges.has(field)) ranges.set(field, /* @__PURE__ */ new Map());
+        ranges.get(field).set(name, unquote2(value));
+      }
+    }
+  }
+  if (!found) return void 0;
+  const fields = ["dependencies", "devDependencies", "optionalDependencies"];
+  return { fields, range: (f, n) => ranges.get(f)?.get(n), mirrors: true };
+}
+function yarnLock(text) {
+  if (!/^# yarn lockfile v1$/m.test(text) && !/^__metadata:$/m.test(text)) return void 0;
+  const specs = /* @__PURE__ */ new Set();
+  for (const line of text.split("\n")) {
+    if (!/^\S.*:$/.test(line) || line.startsWith("#") || line.startsWith("__metadata")) continue;
+    for (const part of line.slice(0, -1).split(",")) specs.add(part.trim().replace(/^["']|["']$/g, ""));
+  }
+  return {
+    fields: ["dependencies", "devDependencies", "optionalDependencies"],
+    has: (name, range) => specs.has(`${name}@${range}`) || specs.has(`${name}@npm:${range}`),
+    mirrors: false
+  };
+}
+function unquote2(s) {
+  return s.replace(/^(['"])(.*)\1$/, "$2");
+}
+function uvLock(text, project, dir) {
+  const doc = toml(text);
+  if (!doc || !Array.isArray(doc.package)) return void 0;
+  const want = dir === "" ? "." : dir;
+  const pkg = doc.package.find(
+    (p) => normalizeDist(String(p?.name ?? "")) === normalizeDist(project) && (p?.source?.editable === want || p?.source?.virtual === want)
+  );
+  const meta = pkg?.metadata;
+  if (!meta || typeof meta !== "object") return void 0;
+  const names = /* @__PURE__ */ new Set();
+  const addAll = (list) => {
+    if (Array.isArray(list)) {
+      for (const r of list) if (typeof r?.name === "string") names.add(normalizeDist(r.name));
+    }
+  };
+  addAll(meta["requires-dist"]);
+  const dev = meta["requires-dev"];
+  if (dev && typeof dev === "object") Object.values(dev).forEach(addAll);
+  return { names, mirrors: true };
+}
+function packageListLock(text) {
+  const doc = toml(text);
+  if (!doc || !Array.isArray(doc.package)) return void 0;
+  const names = /* @__PURE__ */ new Set();
+  for (const p of doc.package) if (typeof p?.name === "string") names.add(normalizeDist(p.name));
+  return { names, mirrors: false };
+}
+function pipfileLock(text) {
+  const json = parseJson(text);
+  if (!json || !json._meta) return void 0;
+  const names = /* @__PURE__ */ new Set();
+  for (const section of [json.default, json.develop]) {
+    if (section && typeof section === "object") Object.keys(section).forEach((n) => names.add(normalizeDist(n)));
+  }
+  return { names, mirrors: false };
+}
+function toml(text) {
+  try {
+    return parse(text);
+  } catch {
+    return void 0;
+  }
+}
+
+// src/rules/deps-lockfile.ts
+var JS_LOCKFILES = ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock"];
+var PY_LOCKFILES = ["uv.lock", "poetry.lock", "pdm.lock"];
+var LOCAL_RANGE = /^(workspace:|file:|link:|portal:|patch:|git|github:|https?:|catalog:)|\//;
+var depsLockfile = {
+  id: "deps/lockfile",
+  version: "0.1.0",
+  keys: "the package name, e.g. `zod` or `httpx`",
+  description: "Dependencies added, changed or removed in package.json, pyproject.toml or Pipfile by the diff that the lockfile next to them (package-lock.json, pnpm-lock.yaml, yarn.lock, uv.lock, poetry.lock, pdm.lock, Pipfile.lock) does not match. Only lockfiles that existed at base and that rsp can read.",
+  run(ctx) {
+    const findings = [];
+    for (const file of ctx.files) {
+      if (file.binary || file.status !== "modified") continue;
+      const name = file.path.split("/").pop();
+      if (name === "package.json") findings.push(...javascript(ctx, file));
+      else if (name === "pyproject.toml") findings.push(...pyproject(ctx, file));
+      else if (name === "Pipfile") findings.push(...pipfile(ctx, file));
+    }
+    return findings;
+  }
+};
+function dirOf(path) {
+  return path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
+}
+function nearestLock(ctx, manifest, names) {
+  let dir = dirOf(manifest);
+  for (; ; ) {
+    const present = names.filter((n) => ctx.readHead(dir + n) !== void 0 && ctx.readBase(dir + n) !== void 0);
+    if (present.length > 1) return void 0;
+    if (present.length === 1) return { path: dir + present[0], dir };
+    if (dir === "") return void 0;
+    dir = dirOf(dir.slice(0, -1));
+  }
+}
+function addedLine(file, pattern) {
+  const l = file.lines.find((x) => x.kind === "add" && pattern.test(x.text));
+  return l && { line: l.newLine, text: l.text.trim() };
+}
+function removedLine(file, pattern) {
+  return file.lines.find((x) => x.kind === "del" && pattern.test(x.text))?.text.trim();
+}
+function escape(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function javascript(ctx, file) {
+  const before = parseJson(ctx.readBase(file.oldPath));
+  const after = parseJson(ctx.readHead(file.path));
+  if (!before || !after) return [];
+  const lock = nearestLock(ctx, file.path, JS_LOCKFILES);
+  if (!lock) return [];
+  const text = ctx.readHead(lock.path);
+  const lockName = lock.path.split("/").pop();
+  const rel = dirOf(file.path).slice(lock.dir.length).replace(/\/$/, "");
+  const view = lockName === "pnpm-lock.yaml" ? pnpmLock(text, rel) : lockName === "yarn.lock" ? yarnLock(text) : npmLock(text, rel);
+  if (!view) return [];
+  const old = jsDeclared(before);
+  const now = jsDeclared(after);
+  const findings = [];
+  const at = (line) => [{ path: file.path, ...line !== void 0 && { line } }, { path: lock.path }];
+  for (const field of JS_DEPENDENCY_FIELDS) {
+    if (!view.fields.includes(field)) continue;
+    for (const [name, range] of now.get(field)) {
+      if (old.get(field).get(name) === range || LOCAL_RANGE.test(range)) continue;
+      const quoted = new RegExp(`"${escape(name)}"\\s*:`);
+      const added = addedLine(file, quoted);
+      if (!added) continue;
+      if (view.range) {
+        const recorded = view.range(field, name);
+        if (recorded === range) continue;
+        findings.push({
+          key: name,
+          message: recorded === void 0 ? `Declares ${codeSpan(name)} ${codeSpan(range)} in ${field}; ${lockName} does not list it` : `Declares ${codeSpan(name)} ${codeSpan(range)} in ${field}; ${lockName} records ${codeSpan(recorded)}`,
+          locations: at(added.line),
+          evidence: added.text
+        });
+      } else if (view.has && !view.has(name, range)) {
+        findings.push({
+          key: name,
+          message: `Declares ${codeSpan(name)} ${codeSpan(range)} in ${field}; ${lockName} has no entry for ${codeSpan(`${name}@${range}`)}`,
+          locations: at(added.line),
+          evidence: added.text
+        });
+      }
+    }
+    if (!view.mirrors || !view.range) continue;
+    for (const [name, range] of old.get(field)) {
+      if (now.get(field).has(name) || LOCAL_RANGE.test(range)) continue;
+      const removed = removedLine(file, new RegExp(`"${escape(name)}"\\s*:`));
+      if (!removed || view.range(field, name) === void 0) continue;
+      findings.push({
+        key: name,
+        message: `Removes ${codeSpan(name)} from ${field}; ${lockName} still lists it`,
+        locations: at(void 0),
+        evidence: removed
+      });
+    }
+  }
+  return findings;
+}
+function pyprojectNames(text) {
+  let doc;
+  try {
+    doc = parse(text ?? "");
+  } catch {
+    return void 0;
+  }
+  const names = /* @__PURE__ */ new Set();
+  const requirement = (r) => {
+    const m = typeof r === "string" ? /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(r) : null;
+    if (m) names.add(normalizeDist(m[1]));
+  };
+  const list = (v) => Array.isArray(v) && v.forEach(requirement);
+  const lists = (v) => v && typeof v === "object" && Object.values(v).forEach(list);
+  const table = (v) => v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).forEach(requirement);
+  list(doc.project?.dependencies);
+  lists(doc.project?.["optional-dependencies"]);
+  lists(doc["dependency-groups"]);
+  list(doc.tool?.uv?.["dev-dependencies"]);
+  lists(doc.tool?.pdm?.["dev-dependencies"]);
+  const poetry = doc.tool?.poetry;
+  table(poetry?.dependencies);
+  table(poetry?.["dev-dependencies"]);
+  if (poetry?.group && typeof poetry.group === "object") for (const g of Object.values(poetry.group)) table(g?.dependencies);
+  names.delete("python");
+  return { project: typeof doc.project?.name === "string" ? doc.project.name : void 0, names, poetry: !!poetry };
+}
+function pyproject(ctx, file) {
+  const before = pyprojectNames(ctx.readBase(file.oldPath));
+  const after = pyprojectNames(ctx.readHead(file.path));
+  if (!before || !after) return [];
+  const lock = nearestLock(ctx, file.path, PY_LOCKFILES);
+  if (!lock) return [];
+  const text = ctx.readHead(lock.path);
+  const lockName = lock.path.split("/").pop();
+  let view;
+  if (lockName === "uv.lock") {
+    if (!after.project) return [];
+    view = uvLock(text, after.project, dirOf(file.path).slice(lock.dir.length).replace(/\/$/, ""));
+  } else {
+    if (lock.dir !== dirOf(file.path)) return [];
+    view = packageListLock(text);
+  }
+  return view ? compareNames(file, lock.path, lockName, before.names, after.names, view, /[A-Za-z0-9][A-Za-z0-9._-]*/g) : [];
+}
+function pipfile(ctx, file) {
+  const names = (text) => {
+    try {
+      const doc = parse(text ?? "");
+      const out = /* @__PURE__ */ new Set();
+      for (const t of [doc.packages, doc["dev-packages"]]) if (t && typeof t === "object") Object.keys(t).forEach((n) => out.add(normalizeDist(n)));
+      return out;
+    } catch {
+      return void 0;
+    }
+  };
+  const before = names(ctx.readBase(file.oldPath));
+  const after = names(ctx.readHead(file.path));
+  const lockPath = `${dirOf(file.path)}Pipfile.lock`;
+  if (!before || !after || ctx.readBase(lockPath) === void 0 || ctx.readHead(lockPath) === void 0) return [];
+  const view = pipfileLock(ctx.readHead(lockPath));
+  return view ? compareNames(file, lockPath, "Pipfile.lock", before, after, view, /[A-Za-z0-9][A-Za-z0-9._-]*/g) : [];
+}
+function compareNames(file, lockPath, lockName, before, after, view, word) {
+  const mentions = (text, name) => [...text.matchAll(word)].some((m) => normalizeDist(m[0]) === name);
+  const findings = [];
+  const manifest = file.path.split("/").pop();
+  for (const name of [...after].sort()) {
+    if (before.has(name) || view.names.has(name)) continue;
+    const added = file.lines.find((l) => l.kind === "add" && mentions(l.text, name));
+    if (!added) continue;
+    findings.push({
+      key: name,
+      message: `Declares ${codeSpan(name)} in ${manifest}; ${lockName} does not list it`,
+      locations: [{ path: file.path, line: added.newLine }, { path: lockPath }],
+      evidence: added.text.trim()
+    });
+  }
+  if (!view.mirrors) return findings;
+  for (const name of [...before].sort()) {
+    if (after.has(name) || !view.names.has(name)) continue;
+    const removed = file.lines.find((l) => l.kind === "del" && mentions(l.text, name));
+    if (!removed) continue;
+    findings.push({
+      key: name,
+      message: `Removes ${codeSpan(name)} from ${manifest}; ${lockName} still lists it`,
+      locations: [{ path: file.path }, { path: lockPath }],
+      evidence: removed.text.trim()
+    });
+  }
+  return findings;
+}
+
 // src/rules/js-builtins.ts
 var NODE_BUILTINS = /* @__PURE__ */ new Set([
   "_http_agent",
@@ -1831,7 +2153,7 @@ function jsManifests(ctx) {
   for (const path of ctx.listHead()) {
     const base = path.split("/").pop();
     if (base === "package.json") {
-      const json = parseJson(ctx.readHead(path));
+      const json = parseJson2(ctx.readHead(path));
       if (!json) continue;
       const names = /* @__PURE__ */ new Set();
       for (const field of DEPENDENCY_FIELDS) {
@@ -1853,7 +2175,7 @@ function jsManifests(ctx) {
     aliases
   };
 }
-function parseJson(text) {
+function parseJson2(text) {
   try {
     const value = JSON.parse(text ?? "");
     return value && typeof value === "object" ? value : void 0;
@@ -1871,6 +2193,8 @@ function pathAliases(text) {
 // src/rules/python-manifests.ts
 var REQUIREMENTS = /(^|\/)(requirements[^/]*\.(txt|in)|requirements\/[^/]+\.(txt|in))$/;
 var REQUIREMENT_NAME = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)/;
+var ENVIRONMENT_YML = /(^|\/)environment\.ya?ml$/;
+var INCLUDE = /^\s*(?:-r|--requirement|-c|--constraint)(?:\s+|=)(\S+)/;
 function declaredDependencies(ctx) {
   const manifests = [];
   const dynamic = [];
@@ -1879,11 +2203,20 @@ function declaredDependencies(ctx) {
     const m = REQUIREMENT_NAME.exec(requirement);
     if (m) names.add(normalizeDist(m[1]));
   };
-  for (const path of ctx.listHead()) {
+  const requirements = new Set(ctx.listHead().filter((p) => REQUIREMENTS.test(p)));
+  for (const path of requirements) {
+    for (const target of includes(path, ctx.readHead(path) ?? "")) {
+      if (ctx.readHead(target) !== void 0) requirements.add(target);
+    }
+  }
+  for (const path of [.../* @__PURE__ */ new Set([...ctx.listHead(), ...requirements])].sort()) {
     const base = path.split("/").pop();
     let found;
     if (base === "pyproject.toml") found = fromPyproject(ctx.readHead(path) ?? "");
-    else if (REQUIREMENTS.test(path)) found = fromRequirements(ctx.readHead(path) ?? "");
+    else if (requirements.has(path)) {
+      found = fromRequirements(ctx.readHead(path) ?? "");
+    } else if (base === "Pipfile") found = fromPipfile(ctx.readHead(path) ?? "");
+    else if (ENVIRONMENT_YML.test(path)) found = fromEnvironmentYml(ctx.readHead(path) ?? "");
     else if (base === "setup.cfg") found = fromSetupCfg(ctx.readHead(path) ?? "");
     else if (base === "setup.py") {
       const text = ctx.readHead(path) ?? "";
@@ -1934,6 +2267,42 @@ function fromRequirements(text) {
     const egg = /#egg=([A-Za-z0-9._-]+)/.exec(raw);
     if (egg) out.push(egg[1]);
     else if (!line.startsWith("-") && !/^[a-z+]+:\/\//.test(line)) out.push(line);
+  }
+  return out;
+}
+function includes(path, text) {
+  const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
+  const out = [];
+  for (const line of text.split("\n")) {
+    const m = INCLUDE.exec(line);
+    if (!m || /^[a-z+]+:\/\//.test(m[1])) continue;
+    const parts = [];
+    for (const part of `${dir}${m[1]}`.split("/")) {
+      if (part === "..") parts.pop();
+      else if (part !== "." && part !== "") parts.push(part);
+    }
+    out.push(parts.join("/"));
+  }
+  return out;
+}
+function fromPipfile(text) {
+  let doc;
+  try {
+    doc = parse(text);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const table of [doc.packages, doc["dev-packages"]]) {
+    if (table && typeof table === "object") out.push(...Object.keys(table));
+  }
+  return out;
+}
+function fromEnvironmentYml(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const m = /^\s*-\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*[=<>!~\[]|\s*$)/.exec(line);
+    if (m && !/:\s*$/.test(line)) out.push(m[1].replace(/^conda-forge::/, ""));
   }
   return out;
 }
@@ -2329,11 +2698,11 @@ var KNOWN_DISTRIBUTIONS = {
 };
 var depsUndeclared = {
   id: "deps/undeclared",
-  version: "0.3.0",
+  version: "0.4.0",
   keys: "the imported module (Python) or package (JavaScript), e.g. `boto3`",
   description: "Python and JavaScript/TypeScript imports added in the diff whose package is not declared in a dependency manifest.",
   run(ctx) {
-    return [...python(ctx), ...javascript(ctx)];
+    return [...python(ctx), ...javascript2(ctx)];
   }
 };
 var PYTHON_TEST_PATH = /(^|\/)(tests?|testing)\/|(^|\/)(test_[^/]*|[^/]*_test|conftest)\.py$/;
@@ -2367,7 +2736,7 @@ function python(ctx) {
   }
   return findings;
 }
-function javascript(ctx) {
+function javascript2(ctx) {
   const jsFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && JS_FILE.test(f.path));
   if (jsFiles.length === 0) return [];
   const manifests = jsManifests(ctx);
@@ -2815,7 +3184,7 @@ var testsDelta = {
 };
 
 // src/rules/index.ts
-var ALL_RULES = [checksDisabled, depsUndeclared, envMissingExample, interfaceUntested, testsDelta];
+var ALL_RULES = [checksDisabled, depsLockfile, depsUndeclared, envMissingExample, interfaceUntested, testsDelta];
 
 // src/report/json.ts
 function toJson(report) {
