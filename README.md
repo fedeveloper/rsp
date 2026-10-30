@@ -96,7 +96,7 @@ RSP needs Node 22 or later and git. It supports Python and JavaScript/TypeScript
 
 ## What RSP reports
 
-There are six rules. Each looks at the diff between the merge-base of the pull request and its head, and each finding has a **key**, which is what you name in `.rsp.toml` to accept that kind of finding (see [Configuration](#configuration-rsptoml)). `rsp --list-rules` prints the same information.
+There are eight rules. Each looks at the diff between the merge-base of the pull request and its head, and each finding has a **key**, which is what you name in `.rsp.toml` to accept that kind of finding (see [Configuration](#configuration-rsptoml)). `rsp --list-rules` prints the same information.
 
 ### `checks/disabled`
 
@@ -161,13 +161,46 @@ Environment variables read by literal name in added code that are missing from t
 
 It ignores variables set by the OS, Node, Vite or CI (`HOME`, `NODE_ENV`, `import.meta.env.MODE`, `GITHUB_*` and similar), writes to the environment, reads moved from elsewhere in the repository, and repositories without an example file: no example file means there is no convention to keep up.
 
+### `interface/removed-still-used`
+
+Names that the diff removes from a module while another file still imports them by name at head: the rename or deletion whose callers were left behind. The key is the module and the name, such as `app/config.py:load_settings`.
+
+- **Python**: top-level functions, classes and assignments, imported with `from module import name` (relative imports and the `src/` layout included).
+- **JavaScript/TypeScript**: exports, including the default export, imported with `import { name }`, `import name` or re-exported with `export { name } from` through a relative path.
+
+```text
+interface/removed-still-used  app/views.py:3  Imports `load_settings` from `app/config.py`, which no longer defines it
+```
+
+It stays silent when the name is still mentioned anywhere in the module (it may be re-exported or assigned), for modules that can define names dynamically (`__getattr__`, `import *`, `globals()`, `export *`, CommonJS exports), for submodules of a package, for imports guarded by `try` or `TYPE_CHECKING`, and for imports that resolve to more than one file.
+
+### `interface/route-removed`
+
+HTTP routes declared with a literal path that the diff removes, or whose method it changes, and that no file declares at head. The key is the method and path, such as `GET /items/:id`.
+
+- **Python**: Flask and FastAPI decorators (`@app.route` with `methods`, `@router.get`, ...), Django `path()` and `re_path()` in `urls.py`.
+- **JavaScript/TypeScript**: `app.get("/x", ...)` and the other methods on receivers named like a server or router (`app`, `router`, `server`, `fastify`, `api`, `*Router`, ...), so client calls such as `axios.get("/x")` are not routes.
+
+```text
+interface/route-removed  src/server.ts  Removed route `DELETE /items/:sku`; no file declares it at head
+```
+
+Renaming a path parameter is not a change, and a route moved to another file or router is still served. Routes in tests, examples and docs are left out, and so are paths built at run time.
+
 ### `interface/untested-change`
 
-Public functions whose parameters changed while no test file changed by the diff mentions them. The key is the function name, such as `load_settings` or `Store.add`.
+Public interfaces that changed while no test file changed by the diff mentions them. The key is the function or type name, such as `load_settings`, `Store.add` or `Settings`.
 
-A change means a parameter added or removed, a new or changed default, a different order, or a rename where callers can pass the parameter by name. For Python this covers public top-level functions and methods of public classes; for JavaScript/TypeScript, exported functions and exported arrow functions.
+- **Parameters**: a parameter added or removed, a new or changed default, a different order, or a rename where callers can pass the parameter by name. For Python this covers public top-level functions, methods of public classes, and the constructors that dataclasses, attrs classes and Pydantic models get from their fields; for JavaScript/TypeScript, exported functions, exported arrow functions, and constructors and public methods of exported classes.
+- **Fields of TypeScript types**: fields of exported interfaces and object type aliases removed, added as required, or made required. Adding an optional field is not reported.
+- **Return types**: a return annotation changed, after normalizing spellings that mean the same (`List[str]` and `list[str]`, `Optional[int]` and `int | None`, union order). Adding or removing an annotation is not a change.
 
-It ignores changes to annotations and formatting only, renames of JavaScript positional parameters (callers cannot see them), private names (`_helper`), typed overloads that add no new parameter list, functions that a changed test mentions, files that are themselves tests, and repositories with no tests at all.
+```text
+interface/untested-change  src/api.py:4       Return type of `load`: changed `dict` to `list`; no test changed by the diff mentions it
+interface/untested-change  src/config.ts:1    Fields of `Settings`: removed `port`; added required `timeout`; no test changed by the diff mentions it
+```
+
+It ignores changes to parameter annotations and formatting only, renames of JavaScript positional parameters (callers cannot see them), private names (`_helper`), typed overloads that add no new parameter list, return types of overloaded functions, fields removed from interfaces that extend another one, types with index signatures, functions and types that a changed test mentions, files that are themselves tests, and repositories with no tests at all.
 
 ### `tests/delta`
 
@@ -435,7 +468,7 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 - **RSP is not a reviewer.** No findings does not mean a change is correct, only that none of these specific things happened.
 - **Bounded on purpose.** Rules use line-level parsing tuned for precision, not full parsers. Unusual syntax is more likely to be missed than misreported.
 - **Two ecosystems.** Python and JavaScript/TypeScript. `deps/lockfile` checks that the lockfile records what the manifest declares, not that the locked versions satisfy the ranges. CI checks cover GitHub Actions workflows.
-- **Interface changes are about parameters.** Return types, behaviour and class attributes are not compared, and "a test mentions it" is a name match, not coverage.
+- **Interface changes are about what callers write.** Parameters, TypeScript type fields, return annotations, imported names and literal routes are compared; behaviour, Python class attributes and routes built at run time are not, and "a test mentions it" is a name match, not coverage.
 - **Test delta costs a second test run** and is only as good as the JUnit report: tests that the runner does not report, such as doctests in some setups, are not seen.
 
 ## FAQ

@@ -1,0 +1,4 @@
+[
+  {"ruleId": "interface/route-removed", "path": "server.js", "message": "Removed route `DELETE /items/:sku`; no file declares it at head", "evidence": "app.delete(\"/items/:sku\", (req, res) => res.sendStatus(204));"},
+  {"ruleId": "interface/route-removed", "path": "server.js", "message": "Removed route `GET /legacy`; no file declares it at head", "evidence": "app.get(\"/legacy\", (req, res) => res.redirect(\"/items\"));"}
+]

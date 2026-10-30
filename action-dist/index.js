@@ -2055,12 +2055,12 @@ function pipfile(ctx, file) {
   return view ? compareNames(file, lockPath, "Pipfile.lock", before, after, view, /[A-Za-z0-9][A-Za-z0-9._-]*/g) : [];
 }
 function compareNames(file, lockPath, lockName, before, after, view, word) {
-  const mentions = (text, name) => [...text.matchAll(word)].some((m) => normalizeDist(m[0]) === name);
+  const mentions2 = (text, name) => [...text.matchAll(word)].some((m) => normalizeDist(m[0]) === name);
   const findings = [];
   const manifest = file.path.split("/").pop();
   for (const name of [...after].sort()) {
     if (before.has(name) || view.names.has(name)) continue;
-    const added = file.lines.find((l) => l.kind === "add" && mentions(l.text, name));
+    const added = file.lines.find((l) => l.kind === "add" && mentions2(l.text, name));
     if (!added) continue;
     findings.push({
       key: name,
@@ -2072,7 +2072,7 @@ function compareNames(file, lockPath, lockName, before, after, view, word) {
   if (!view.mirrors) return findings;
   for (const name of [...before].sort()) {
     if (after.has(name) || !view.names.has(name)) continue;
-    const removed = file.lines.find((l) => l.kind === "del" && mentions(l.text, name));
+    const removed = file.lines.find((l) => l.kind === "del" && mentions2(l.text, name));
     if (!removed) continue;
     findings.push({
       key: name,
@@ -2874,6 +2874,273 @@ function envReader(path) {
   return void 0;
 }
 
+// src/rules/interface-removed.ts
+var PY_TOP_DEFINITION = /^(?:async\s+def|def|class)\s+([A-Za-z_]\w*)|^([A-Za-z_]\w*)\s*(?::[^=]+)?=(?!=)/;
+var JS_EXPORTED = [
+  /^\s*export\s+(?:declare\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\s*\*?|class|const|let|var|interface|type|enum|namespace)\s+([A-Za-z_$][\w$]*)/
+];
+var JS_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+var interfaceRemoved = {
+  id: "interface/removed-still-used",
+  version: "0.1.0",
+  keys: "the file and the name, e.g. `app/config.py:load_settings`",
+  description: "Top-level functions, classes and constants (Python) or exports (JavaScript/TypeScript) that the diff removes from a module while another file still imports them by name at head.",
+  run(ctx) {
+    const removed = /* @__PURE__ */ new Map();
+    for (const file of ctx.files) {
+      if (file.binary || file.status !== "modified") continue;
+      const names = file.path.endsWith(".py") ? removedPython(ctx, file) : JS_FILE.test(file.path) && !/\.(vue|svelte)$/.test(file.path) ? removedJs(ctx, file) : void 0;
+      if (names && names.size > 0) removed.set(file.path, names);
+    }
+    if (removed.size === 0) return [];
+    const head = ctx.listHead();
+    const findings = [];
+    for (const importer of head) {
+      const isPy = importer.endsWith(".py");
+      const isJs = JS_FILE.test(importer);
+      if (!isPy && !isJs) continue;
+      const text = ctx.readHead(importer);
+      if (text === void 0) continue;
+      const imports = isPy ? pythonImports(text, importer, head) : jsImports(text, importer, head);
+      for (const imp of imports) {
+        if (imp.module === importer) continue;
+        const names = removed.get(imp.module);
+        if (!names?.has(imp.name)) continue;
+        findings.push({
+          key: `${imp.module}:${imp.name}`,
+          message: `Imports ${codeSpan(imp.name)} from ${codeSpan(imp.module)}, which no longer defines it`,
+          locations: [{ path: importer, line: imp.line }],
+          evidence: imp.evidence
+        });
+      }
+    }
+    return findings;
+  }
+};
+function mentions(text, name) {
+  return new RegExp(`(^|[^\\w$])${name.replace(/\$/g, "\\$")}($|[^\\w$])`).test(text);
+}
+function removedPython(ctx, file) {
+  const before = ctx.readBase(file.oldPath) ?? "";
+  const after = ctx.readHead(file.path) ?? "";
+  const out = /* @__PURE__ */ new Set();
+  if (/^def\s+__getattr__\b|^from\s+\S+\s+import\s+\*|^\s*globals\(\)/m.test(after)) return out;
+  const deleted = new Set(file.lines.filter((l) => l.kind === "del").map((l) => l.oldLine));
+  const inStrings = stringLines(before);
+  before.split("\n").forEach((line, i) => {
+    if (!deleted.has(i + 1) || inStrings.has(i + 1)) return;
+    const m = PY_TOP_DEFINITION.exec(line);
+    const name = m?.[1] ?? m?.[2];
+    if (name && name !== "__all__" && !mentions(after, name)) out.add(name);
+  });
+  if (file.path.endsWith("/__init__.py")) {
+    const dir = file.path.slice(0, -"__init__.py".length);
+    for (const p of ctx.listHead()) {
+      if (!p.startsWith(dir)) continue;
+      const sub = p.slice(dir.length).split("/")[0].replace(/\.py$/, "");
+      out.delete(sub);
+    }
+  }
+  return out;
+}
+function removedJs(ctx, file) {
+  const before = ctx.readBase(file.oldPath) ?? "";
+  const after = ctx.readHead(file.path) ?? "";
+  const out = /* @__PURE__ */ new Set();
+  if (/^\s*export\s*\*|module\.exports|^\s*exports\./m.test(after)) return out;
+  const deleted = new Set(file.lines.filter((l) => l.kind === "del").map((l) => l.oldLine));
+  const nonCode = nonCodeLines(before);
+  before.split("\n").forEach((line, i) => {
+    if (!deleted.has(i + 1) || nonCode.has(i + 1)) return;
+    if (/^\s*export\s+default\b/.test(line) && !/^\s*export\s+default\b|\bas\s+default\b/m.test(after)) out.add("default");
+    for (const re of JS_EXPORTED) {
+      const name = re.exec(line)?.[1];
+      if (name && !mentions(after, name)) out.add(name);
+    }
+  });
+  return out;
+}
+function unique(candidates2, head) {
+  const found = [...new Set(candidates2.filter((c) => head.has(c)))];
+  return found.length === 1 ? found[0] : void 0;
+}
+function normalize(path) {
+  const parts = [];
+  for (const part of path.split("/")) {
+    if (part === "..") {
+      if (parts.length === 0) return void 0;
+      parts.pop();
+    } else if (part !== "." && part !== "") parts.push(part);
+  }
+  return parts.join("/");
+}
+function pythonImports(text, importer, headList) {
+  const head = new Set(headList);
+  const lines = text.split("\n");
+  const inStrings = stringLines(text);
+  const dir = importer.includes("/") ? importer.slice(0, importer.lastIndexOf("/")) : "";
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^\s*from\s+(\.*)([\w.]*)\s+import\s+(.*)$/.exec(lines[i].replace(/#.*$/, ""));
+    if (!m || inStrings.has(i + 1) || isGuardedImport(lines, i)) continue;
+    const [, dots, dotted, rest] = m;
+    let base;
+    if (dots) {
+      let up = dir;
+      for (let d = 1; d < dots.length; d++) up = up.includes("/") ? up.slice(0, up.lastIndexOf("/")) : "";
+      const rel = [up, dotted.replace(/\./g, "/")].filter(Boolean).join("/");
+      base = [rel];
+    } else {
+      const path = dotted.replace(/\./g, "/");
+      base = [path, `src/${path}`];
+    }
+    const module = unique(base.flatMap((b) => [`${b}.py`, `${b}/__init__.py`]), head);
+    if (!module) continue;
+    const parts = [{ text: rest, line: i }];
+    if (rest.trim().startsWith("(") && !rest.includes(")")) {
+      for (let j = i + 1; j < lines.length; j++) {
+        parts.push({ text: lines[j].replace(/#.*$/, ""), line: j });
+        if (lines[j].includes(")")) break;
+      }
+    } else if (rest.trim().endsWith("\\")) {
+      for (let j = i + 1; j < lines.length; j++) {
+        parts.push({ text: lines[j], line: j });
+        if (!lines[j].trim().endsWith("\\")) break;
+      }
+    }
+    for (const part of parts) {
+      for (const item of part.text.replace(/[()\\]/g, "").split(",")) {
+        const name = item.trim().split(/\s+/)[0];
+        if (name && /^[A-Za-z_]\w*$/.test(name)) {
+          out.push({ module, name, line: part.line + 1, evidence: lines[part.line].trim() });
+        }
+      }
+    }
+  }
+  return out;
+}
+function jsImports(text, importer, headList) {
+  const head = new Set(headList);
+  const lines = text.split("\n");
+  const nonCode = nonCodeLines(text);
+  const dir = importer.includes("/") ? importer.slice(0, importer.lastIndexOf("/")) : "";
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (nonCode.has(i + 1) || !/^\s*(import|export)\b/.test(lines[i])) continue;
+    let end = i;
+    while (end < lines.length - 1 && end - i < 50 && !/\bfrom\s*['"][^'"]+['"]/.test(lines[end]) && !/;\s*$/.test(lines[end])) end++;
+    let inText = false;
+    for (let j = i + 1; j <= end; j++) inText ||= nonCode.has(j + 1);
+    if (inText) continue;
+    const statement = lines.slice(i, end + 1).join("\n");
+    const m = /^\s*(import|export)\s+(?:type\s+)?([\s\S]*?)\s*\bfrom\s*['"](\.{1,2}\/[^'"]*)['"]/.exec(statement);
+    if (!m) continue;
+    const [, keyword, clause, spec] = m;
+    const target = normalize([dir, spec].filter(Boolean).join("/"));
+    if (target === void 0) continue;
+    const stem = target.replace(/\.(m|c)?js$/, "");
+    const module = unique(
+      [target, ...JS_EXTENSIONS.map((e) => `${stem}${e}`), ...JS_EXTENSIONS.map((e) => `${target}/index${e}`)],
+      head
+    );
+    if (!module) continue;
+    const at = (name) => {
+      for (let j = i; j <= end; j++) {
+        if (mentions(lines[j], name)) return j;
+      }
+      return i;
+    };
+    const names = [];
+    const braces = /\{([^}]*)\}/.exec(clause);
+    if (braces) {
+      for (const item of braces[1].split(",")) {
+        const name = item.trim().replace(/^type\s+/, "").split(/\s+/)[0];
+        if (name && /^[A-Za-z_$][\w$]*$/.test(name)) names.push(name === "default" ? "default" : name);
+      }
+    }
+    if (keyword === "import" && /^[A-Za-z_$][\w$]*\s*(,|$)/.test(clause.trim())) names.push("default");
+    for (const name of names) {
+      const line = name === "default" ? i : at(name);
+      out.push({ module, name, line: line + 1, evidence: lines[line].trim() });
+    }
+    i = end;
+  }
+  return out;
+}
+
+// src/rules/interface-routes.ts
+var NOT_SERVED = /(^|\/)(tests?|__tests__|spec|e2e|examples?|docs?|fixtures?|benchmarks?|demo)\/|(^|\/)(test_[^/]*|[^/]*_test)\.py$|\.(test|spec)\.[cm]?[jt]sx?$/;
+var PY_DECORATOR = /^\s*@\s*[A-Za-z_][\w.]*\.(route|get|post|put|patch|delete|head|options|websocket|api_route)\s*\(\s*[rRbBuU]?(["'])(\/[^"']*)\2([^)]*)/;
+var DJANGO_PATH = /^\s*(?:path|re_path)\s*\(\s*[rR]?(["'])([^"']*)\1\s*,/;
+var JS_ROUTE = /(?:^|[^\w$.])(app|router|server|fastify|api|routes?|[A-Za-z_$][\w$]*(?:Router|App|Server))\s*\.\s*(get|post|put|patch|delete|head|options|all)\s*\(\s*(["'`])(\/[^"'`$]*)\3\s*,/;
+function routesOn(line, file) {
+  const make = (method, path) => ({
+    method,
+    path,
+    shape: `${method} ${path.replace(/<[^>]+>|\{[^}]+\}|:[A-Za-z_$][\w$]*(\([^)]*\))?\??/g, "{}")}`
+  });
+  if (file.endsWith(".py")) {
+    const m2 = PY_DECORATOR.exec(line);
+    if (m2) {
+      const [, kind2, , path, rest] = m2;
+      if (kind2 === "route" || kind2 === "api_route") {
+        const methods = /methods\s*=\s*[[(]([^\])]*)[\])]/.exec(rest);
+        if (/methods\s*=/.test(rest) && !methods) return [];
+        const list = methods ? [...methods[1].matchAll(/["'](\w+)["']/g)].map((x) => x[1].toUpperCase()) : ["GET"];
+        return list.map((method) => make(method, path));
+      }
+      return [make(kind2 === "websocket" ? "WEBSOCKET" : kind2.toUpperCase(), path)];
+    }
+    const d = /(^|\/)urls\.py$/.test(file) ? DJANGO_PATH.exec(line) : null;
+    return d ? [make("ANY", `/${d[2].replace(/^\^?\/?/, "")}`)] : [];
+  }
+  const m = JS_ROUTE.exec(line);
+  return m ? [make(m[2].toUpperCase(), m[4])] : [];
+}
+var interfaceRoutes = {
+  id: "interface/route-removed",
+  version: "0.1.0",
+  keys: "the method and path as written, e.g. `GET /items/:id`",
+  description: "HTTP routes declared with a literal path (Flask, FastAPI, Django, Express, Fastify and similar routers) that the diff removes, or whose method it changes, and that no file declares at head. Tests and examples are left out.",
+  run(ctx) {
+    const isSource2 = (p) => (p.endsWith(".py") || JS_FILE.test(p) && !/\.(vue|svelte)$/.test(p)) && !NOT_SERVED.test(p);
+    const removed = [];
+    for (const file of ctx.files) {
+      if (file.binary || file.status === "added" || !isSource2(file.oldPath)) continue;
+      const before = ctx.readBase(file.oldPath) ?? "";
+      const nonCode = file.oldPath.endsWith(".py") ? stringLines(before) : nonCodeLines(before);
+      for (const l of file.lines) {
+        if (l.kind !== "del" || nonCode.has(l.oldLine)) continue;
+        for (const route of routesOn(l.text, file.oldPath)) removed.push({ file: file.path, route, evidence: l.text.trim() });
+      }
+    }
+    if (removed.length === 0) return [];
+    const served = /* @__PURE__ */ new Set();
+    for (const path of ctx.listHead()) {
+      if (!isSource2(path)) continue;
+      const text = ctx.readHead(path) ?? "";
+      const nonCode = path.endsWith(".py") ? stringLines(text) : nonCodeLines(text);
+      text.split("\n").forEach((line, i) => {
+        if (!nonCode.has(i + 1)) for (const r of routesOn(line, path)) served.add(r.shape);
+      });
+    }
+    const findings = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const { file, route, evidence } of removed) {
+      const key = `${route.method} ${route.path}`;
+      if (served.has(route.shape) || seen.has(`${file}\0${key}`)) continue;
+      seen.add(`${file}\0${key}`);
+      findings.push({
+        key,
+        message: `Removed route ${codeSpan(key)}; no file declares it at head`,
+        locations: [{ path: file }],
+        evidence
+      });
+    }
+    return findings;
+  }
+};
+
 // src/rules/signatures.ts
 var PY_DEF = /^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/;
 var PY_CLASS = /^class\s+([A-Za-z_]\w*)\b/;
@@ -2902,18 +3169,53 @@ function pythonSignatures(text) {
     if (raw === void 0) return;
     let params = splitParams(raw).map(pythonParam).filter((p) => p !== "");
     if (owner && (params[0] === "self" || params[0] === "cls")) params = params.slice(1);
-    const overload = decorators.some((d) => /^@(typing\.)?overload\b/.test(d));
-    out.push({ name: owner ? `${owner}.${name}` : name, params, shape: params.join(", "), line: i + 1, overload });
+    const overload = decorators.some((d) => /^@(typing\.|t\.|typing_extensions\.)?overload\b/.test(d));
+    const after = closingParen(lines, i, line.indexOf("(", m[0].length - 1));
+    const returns = after && /^\s*->\s*(.+?)\s*:\s*(#.*)?$/.exec(after)?.[1];
+    out.push({ name: owner ? `${owner}.${name}` : name, params, shape: params.join(", "), line: i + 1, overload, ...returns && { returns: normalizeType(returns) } });
   });
   const lastPlain = new Map(out.filter((s) => !s.overload).map((s) => [s.name, s]));
-  return mergeOverloads(out.filter((s) => s.overload || lastPlain.get(s.name) === s).map(({ overload: _, ...s }) => s));
+  const explicit = mergeOverloads(out.filter((s) => s.overload || lastPlain.get(s.name) === s).map(({ overload: _, ...s }) => s));
+  const fromFields = fieldConstructors(lines, inStrings).filter((f) => !explicit.some((e) => e.name === f.name));
+  return [...explicit, ...fromFields];
+}
+var FIELD_CLASS_DECORATOR = /^@(dataclasses\.dataclass|dataclass|attr\.s|attr\.attrs|attrs\.define|attrs\.frozen|attr\.define|attr\.frozen|define|frozen)\b/;
+var KEYWORD_MODEL = /\b(BaseModel|BaseSettings)\b/;
+var FIELD = /^    ([A-Za-z_]\w*)\s*:\s*(.+?)(?:\s*=\s*(.+))?$/;
+function fieldConstructors(lines, inStrings) {
+  const out = [];
+  lines.forEach((line, i) => {
+    const cls = /^class\s+([A-Za-z_]\w*)\s*(\(([^)]*)\))?\s*:/.exec(line);
+    if (!cls || inStrings.has(i + 1) || cls[1].startsWith("_")) return;
+    const decorated = decoratorsAbove(lines, i).some((d) => FIELD_CLASS_DECORATOR.test(d));
+    const model = KEYWORD_MODEL.test(cls[3] ?? "");
+    if (!decorated && !model) return;
+    const params = [];
+    let first;
+    let last = i + 1;
+    for (let j = i + 1; j < lines.length; j++) {
+      const body = lines[j];
+      if (/^\S/.test(body) && !body.startsWith("#")) break;
+      if (body.trim() === "" || inStrings.has(j + 1)) continue;
+      last = j + 1;
+      if (/^    (async\s+)?def\s+__init__\b/.test(body)) return;
+      const f = FIELD.exec(body.replace(/\s+#.*$/, ""));
+      if (!f || /^(typing\.)?ClassVar\b/.test(f[2]) || f[1] === "model_config") continue;
+      first ??= j + 1;
+      params.push(f[3] === void 0 ? f[1] : `${f[1]}=${f[3].trim()}`);
+    }
+    if (first === void 0) return;
+    const shape = (model ? [...params].sort() : params).join(", ");
+    out.push({ name: `${cls[1]}.__init__`, params, shape, line: i + 1, span: [first, last] });
+  });
+  return out;
 }
 function decoratorsAbove(lines, index) {
   const out = [];
   for (let i = index - 1; i >= 0 && lines[i].trim().startsWith("@"); i--) out.push(lines[i].trim());
   return out;
 }
-var JS_EXPORTED = [
+var JS_EXPORTED2 = [
   /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*(?:<[^(]*>)?\s*\(/,
   /^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:function\s*\*?\s*[\w$]*\s*)?(?:<[^(]*>)?\s*\(/
 ];
@@ -2921,19 +3223,99 @@ function jsSignatures(text) {
   const lines = text.split("\n");
   const out = [];
   lines.forEach((line, i) => {
-    for (const re of JS_EXPORTED) {
+    for (const re of JS_EXPORTED2) {
       const m = re.exec(line);
       if (!m) continue;
-      if (re === JS_EXPORTED[1] && !isArrowOrFunction(lines, i, m[0].length - 1)) continue;
+      if (re === JS_EXPORTED2[1] && !isArrowOrFunction(lines, i, m[0].length - 1)) continue;
       const raw = paramsFrom(lines, i, m[0].length - 1, "//");
       if (raw === void 0) continue;
       const params = splitParams(raw).map(jsParam).filter((p) => p !== "" && p !== "this");
       const shape = params.map((p) => p.replace(/^(\.\.\.)?[A-Za-z_$][\w$]*/, "$1_")).join(", ");
-      out.push({ name: m[1], params, shape, line: i + 1 });
+      const returns = jsReturns(closingParen(lines, i, m[0].length - 1));
+      out.push({ name: m[1], params, shape, line: i + 1, ...returns && { returns } });
       break;
     }
   });
-  return mergeOverloads(out);
+  out.push(...classMethods(lines));
+  return [...mergeOverloads(out), ...typeFields(lines)];
+}
+var JS_EXPORTED_TYPE = /^(\s*)export\s+(?:declare\s+)?(?:interface\s+([A-Za-z_$][\w$]*)\s*(?:<.*>)?\s*(extends\s+[^{]+)?\{\s*$|type\s+([A-Za-z_$][\w$]*)\s*(?:<.*>)?\s*=\s*\{\s*$)/;
+var TYPE_MEMBER = /^(?:readonly\s+)?([A-Za-z_$][\w$]*|"[^"]+"|'[^']+')\s*(\?)?\s*[:(<]/;
+function typeFields(lines) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Map();
+  lines.forEach((line, i) => {
+    const t = JS_EXPORTED_TYPE.exec(line);
+    if (!t) return;
+    const name = t[2] ?? t[4];
+    seen.set(name, (seen.get(name) ?? 0) + 1);
+    const end = lines.findIndex((l, j) => j > i && l.startsWith(`${t[1]}}`));
+    if (end < 0 || !/^\s*\};?\s*$/.test(lines[end])) return;
+    const indent = lines.slice(i + 1, end).find((l) => l.trim() !== "")?.match(/^\s*/)?.[0];
+    if (!indent) return;
+    const params = [];
+    let first;
+    for (let j = i + 1; j < end; j++) {
+      const member = lines[j];
+      if (!member.startsWith(indent) || /^\s/.test(member.slice(indent.length))) continue;
+      const text = member.trim();
+      if (/^(\/\/|\/\*|\*)/.test(text)) continue;
+      if (/^(\[|\(|<|new\b|get\s|set\s|\.\.\.)/.test(text)) return;
+      const m = TYPE_MEMBER.exec(text);
+      if (!m) return;
+      first ??= j + 1;
+      params.push(`${m[1].replace(/^["']|["']$/g, "")}${m[2] ?? ""}`);
+    }
+    if (first === void 0) return;
+    const unique2 = [...new Set(params)].sort();
+    out.push({ name, params: unique2, shape: unique2.join(", "), line: i + 1, span: [first, end], fields: true, ...t[3] && { extends: true } });
+  });
+  return out.filter((s) => seen.get(s.name) === 1);
+}
+function describeFields(before, after, inherits) {
+  const required = (fields) => new Set(fields.filter((f) => !f.endsWith("?")));
+  const names = (fields) => new Set(fields.map((f) => f.replace(/\?$/, "")));
+  const oldNames = names(before);
+  const oldRequired = required(before);
+  const nowNames = names(after);
+  const parts = [];
+  const removed = inherits ? [] : [...oldNames].filter((f) => !nowNames.has(f));
+  const added = [...required(after)].filter((f) => !oldNames.has(f));
+  const madeRequired = [...required(after)].filter((f) => oldNames.has(f) && !oldRequired.has(f));
+  if (removed.length) parts.push(`removed ${removed.map((f) => codeSpan(f)).join(", ")}`);
+  if (added.length) parts.push(`added required ${added.map((f) => codeSpan(f)).join(", ")}`);
+  if (madeRequired.length) parts.push(`made ${madeRequired.map((f) => codeSpan(f)).join(", ")} required`);
+  return parts.length ? parts.join("; ") : void 0;
+}
+var JS_EXPORTED_CLASS = /^(\s*)export\s+(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
+var JS_METHOD = /^\s*((?:(?:public|static|async|override|readonly)\s+)*)(constructor|[A-Za-z_$][\w$]*)\s*(?:<[^(]*>)?\s*\(/;
+var NOT_METHODS = /* @__PURE__ */ new Set(["if", "for", "while", "switch", "return", "catch", "function", "get", "set", "super"]);
+function classMethods(lines) {
+  const out = [];
+  lines.forEach((line, i) => {
+    const cls = JS_EXPORTED_CLASS.exec(line);
+    if (!cls) return;
+    const end = lines.findIndex((l, j) => j > i && l.startsWith(`${cls[1]}}`));
+    if (end < 0) return;
+    const indent = lines.slice(i + 1, end).find((l) => l.trim() !== "")?.match(/^\s*/)?.[0];
+    if (!indent) return;
+    for (let j = i + 1; j < end; j++) {
+      const member = lines[j];
+      if (!member.startsWith(indent) || /^\s/.test(member.slice(indent.length))) continue;
+      const m = JS_METHOD.exec(member);
+      if (!m || NOT_METHODS.has(m[2]) || /\bstatic\b/.test(m[1])) continue;
+      const open = m[0].length - 1;
+      const rest = closingParen(lines, j, open);
+      if (rest === void 0 || !/^\s*(:[^=;{]+)?\s*(\{.*|;)?\s*$/.test(rest)) continue;
+      const raw = paramsFrom(lines, j, open, "//");
+      if (raw === void 0) continue;
+      const params = splitParams(raw).map(jsParam).filter((p) => p !== "" && p !== "this");
+      const shape = params.map((p) => p.replace(/^(\.\.\.)?[A-Za-z_$][\w$]*/, "$1_")).join(", ");
+      const returns = jsReturns(rest);
+      out.push({ name: `${cls[2]}.${m[2]}`, params, shape, line: j + 1, ...returns && { returns } });
+    }
+  });
+  return out;
 }
 function mergeOverloads(sigs) {
   const byName = /* @__PURE__ */ new Map();
@@ -2944,6 +3326,7 @@ function mergeOverloads(sigs) {
       prev.shapes.add(s.shape);
       byName.set(s.name, { ...prev, params: [...prev.params, "|", ...s.params], shape: `${prev.shape} | ${s.shape}` });
     }
+    if (prev) delete byName.get(s.name).returns;
   }
   return [...byName.values()].map(({ shapes: _, ...s }) => s);
 }
@@ -2962,6 +3345,36 @@ function describeChange(before, after, positional = false) {
   if (changed.length) parts.push(`changed ${changed.map((p) => `${codeSpan(old.get(name(p)))} to ${codeSpan(p)}`).join(", ")}`);
   if (parts.length === 0) parts.push(`changed order from \`(${before.join(", ")})\` to \`(${after.join(", ")})\``);
   return parts.join("; ");
+}
+function jsReturns(after) {
+  const m = after === void 0 ? null : /^\s*:\s*(.+?)\s*(=>.*|\{.*|;)?\s*$/.exec(after);
+  if (!m || /[{(<[|&,]$|^asserts\b|\bis\s/.test(m[1])) return void 0;
+  return normalizeType(m[1]);
+}
+function normalizeType(type) {
+  let t = type.replace(/\s+/g, " ").trim().replace(/^["']([^"']*)["']$/, "$1").replace(/\btyping(_extensions)?\./g, "");
+  t = t.replace(/\b(List|Dict|Set|FrozenSet|Tuple|Type)\[/g, (_, g) => `${g.toLowerCase()}[`);
+  for (let prev = ""; prev !== t; ) {
+    prev = t;
+    t = t.replace(/\bOptional\[([^[\]]*(?:\[[^[\]]*\])?[^[\]]*)\]/g, "$1 | None");
+  }
+  const members = splitTopLevelAll(t, "|");
+  return members.length > 1 ? members.sort().join(" | ") : t;
+}
+function splitTopLevelAll(s, sep) {
+  const parts = [];
+  let depth = 0;
+  let cur = "";
+  for (const c of s) {
+    if ("([{<".includes(c)) depth++;
+    else if (")]}>".includes(c)) depth--;
+    if (c === sep && depth === 0) {
+      parts.push(cur.trim());
+      cur = "";
+    } else cur += c;
+  }
+  parts.push(cur.trim());
+  return parts;
 }
 function isArrowOrFunction(lines, index, open) {
   const before = lines[index].slice(0, open);
@@ -3089,9 +3502,9 @@ var JS_TEST_FILE = /(^|\/)(__tests__|tests?|e2e|spec)\/.*\.[cm]?[jt]sx?$|\.(test
 var PYTHON_TEST_DIR = /(^|\/)tests?\//;
 var interfaceUntested = {
   id: "interface/untested-change",
-  version: "0.1.0",
-  keys: "the function name, e.g. `load_settings` or `Store.add`",
-  description: "Public functions whose parameters changed (added, removed, reordered, new defaults, or renamed where callers pass them by name) while no test file changed by the diff mentions them. Only in repositories that have tests.",
+  version: "0.2.0",
+  keys: "the function or type name, e.g. `load_settings`, `Store.add` or `Settings`",
+  description: "Public functions whose parameters changed (added, removed, reordered, new defaults, or renamed where callers pass them by name), and exported TypeScript object types whose fields were removed, added as required or made required, while no test file changed by the diff mentions them. Only in repositories that have tests.",
   run(ctx) {
     const head = ctx.listHead();
     if (!head.some(isTestFile2)) return [];
@@ -3102,18 +3515,28 @@ var interfaceUntested = {
       if (isTestFile2(file.path) || PYTHON_TEST_DIR.test(file.path)) continue;
       const extract = signatureReader(file.path);
       if (!extract) continue;
-      const before = new Map(extract(ctx.readBase(file.oldPath) ?? "").map((s) => [s.name, s]));
+      const id = (s) => `${s.fields ? "type" : "function"}:${s.name}`;
+      const before = new Map(extract(ctx.readBase(file.oldPath) ?? "").map((s) => [id(s), s]));
       const touched = new Set(file.lines.filter((l) => l.kind === "add").map((l) => l.newLine));
       for (const sig of extract(ctx.readHead(file.path) ?? "")) {
-        const old = before.get(sig.name);
-        if (!old || old.shape === sig.shape || !touchesDefinition(ctx, file.path, sig, touched)) continue;
+        const old = before.get(id(sig));
+        if (!old || !touchesDefinition(ctx, file.path, sig, touched)) continue;
+        const returned = !sig.fields && old.returns && sig.returns && old.returns !== sig.returns;
+        if (old.shape === sig.shape && !returned) continue;
+        const changes = [];
+        if (old.shape !== sig.shape) {
+          const change = sig.fields ? describeFields(old.params, sig.params, !!(old.extends || sig.extends)) : describeChange(old.params, sig.params, !file.path.endsWith(".py"));
+          if (change !== void 0) changes.push(change);
+        }
+        if (returned) changes.push(`${changes.length ? "return type " : ""}changed ${codeSpan(old.returns)} to ${codeSpan(sig.returns)}`);
+        if (changes.length === 0) continue;
         const parts = sig.name.split(".");
-        const bare = parts.length > 1 && parts[1] === "__init__" ? parts[0] : parts[parts.length - 1];
+        const bare = parts.length > 1 && (parts[1] === "__init__" || parts[1] === "constructor") ? parts[0] : parts[parts.length - 1];
         const word = new RegExp(`\\b${bare.replace(/\$/g, "\\$")}\\b`);
         if (changedTests.some((t) => word.test(t))) continue;
         findings.push({
           key: sig.name,
-          message: `Parameters of ${codeSpan(sig.name)}: ${describeChange(old.params, sig.params, !file.path.endsWith(".py"))}; no test changed by the diff mentions it`,
+          message: `${sig.fields ? "Fields" : old.shape === sig.shape ? "Return type" : "Parameters"} of ${codeSpan(sig.name)}: ${changes.join("; ")}; no test changed by the diff mentions it`,
           locations: [{ path: file.path, line: sig.line }],
           evidence: (ctx.readHead(file.path) ?? "").split("\n")[sig.line - 1].trim()
         });
@@ -3131,6 +3554,10 @@ function isTestFile2(path) {
   return PYTHON_TEST_FILE2.test(path) || JS_TEST_FILE.test(path);
 }
 function touchesDefinition(ctx, path, sig, touched) {
+  if (sig.span) {
+    for (let n = sig.span[0]; n <= sig.span[1]; n++) if (touched.has(n)) return true;
+    return false;
+  }
   const lines = (ctx.readHead(path) ?? "").split("\n");
   for (let n = sig.line; n <= Math.min(lines.length, sig.line + 50); n++) {
     if (touched.has(n)) return true;
@@ -3184,7 +3611,7 @@ var testsDelta = {
 };
 
 // src/rules/index.ts
-var ALL_RULES = [checksDisabled, depsLockfile, depsUndeclared, envMissingExample, interfaceUntested, testsDelta];
+var ALL_RULES = [checksDisabled, depsLockfile, depsUndeclared, envMissingExample, interfaceRemoved, interfaceRoutes, interfaceUntested, testsDelta];
 
 // src/report/json.ts
 function toJson(report) {

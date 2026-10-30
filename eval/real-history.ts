@@ -52,14 +52,52 @@ function countLine(dir: string, commit: string, line: string): number {
 function verify(dir: string, base: string, head: string, f: Finding): string {
   const loc = f.locations[0];
   if (f.ruleId === "deps/lockfile") return verifyLockfile(dir, base, head, f);
+  if (f.ruleId === "interface/removed-still-used") return verifyRemoved(dir, base, head, f);
+  if (f.ruleId === "interface/route-removed") return verifyRoute(dir, base, head, f);
   if (!loc?.line) return "n/a";
   const text = execFileSync("git", ["-C", dir, "show", `${head}:${loc.path}`], { encoding: "utf8" }).split("\n")[loc.line - 1];
   if (text?.trim() !== f.evidence) return "WRONG LINE";
-  if (f.message.startsWith("Parameters")) return verifySignature(dir, base, head, f);
+  if (f.message.startsWith("Parameters") || f.message.startsWith("Return type")) return verifySignature(dir, base, head, f);
+  if (f.message.startsWith("Fields")) return verifyFields(dir, base, head, f);
   if (!f.message.startsWith("Added") && !f.message.startsWith("Imports") && !f.message.startsWith("Reads")) return "line ok";
   const before = countLine(dir, base, text);
   const after = countLine(dir, head, text);
   return after > before ? `new line (${before} -> ${after})` : `NOT NEW (${before} -> ${after})`;
+}
+
+/**
+ * For a removed route: the evidence is a line of the file at base, and the
+ * quoted path no longer occurs in that line form anywhere at head.
+ */
+function verifyRoute(dir: string, base: string, head: string, f: Finding): string {
+  const file = f.locations[0]!.path;
+  let baseText = "";
+  try {
+    baseText = execFileSync("git", ["-C", dir, "show", `${base}:${file}`], { encoding: "utf8" });
+  } catch {
+    return "FILE NOT AT BASE";
+  }
+  if (!baseText.split("\n").some((l) => l.trim() === f.evidence)) return "EVIDENCE NOT AT BASE";
+  return countLine(dir, head, baseText.split("\n").find((l) => l.trim() === f.evidence)!) === 0 ? "route line gone at head" : "CHECK: same line still at head";
+}
+
+/**
+ * For a removed name: the importer line at head holds the evidence and names
+ * it, the module at base defines it on a line of its own, and the module at
+ * head does not contain the word at all.
+ */
+function verifyRemoved(dir: string, base: string, head: string, f: Finding): string {
+  const loc = f.locations[0]!;
+  const show = (commit: string, path: string) => execFileSync("git", ["-C", dir, "show", `${commit}:${path}`], { encoding: "utf8" });
+  const [name, module] = [...f.message.matchAll(/`([^`]+)`/g)].map((m) => m[1]!);
+  const line = show(head, loc.path).split("\n")[loc.line! - 1];
+  if (line?.trim() !== f.evidence) return "WRONG LINE";
+  if (name !== "default" && !line.includes(name!)) return "NAME NOT ON LINE";
+  const word = new RegExp(`\\b${name}\\b`);
+  const definedAtBase = show(base, module!).split("\n").some((l) => word.test(l) && /^(export\s|def\s|async\s+def\s|class\s|[A-Za-z_]\w*\s*[:=])/.test(l));
+  if (!definedAtBase) return "NOT DEFINED AT BASE";
+  if (name === "default") return /^\s*export\s+default\b/m.test(show(head, module!)) ? "STILL EXPORTED" : "default export removed";
+  return word.test(show(head, module!)) ? "NAME STILL IN MODULE" : "removed, still imported";
 }
 
 /**
@@ -97,11 +135,38 @@ function verifySignature(dir: string, base: string, head: string, f: Finding): s
     def.push(lines[i]!.trim());
     if (/\)\s*(->.*)?:\s*(#.*)?$|\)\s*(:[^=]*)?(=>|\{)/.test(lines[i]!)) break;
   }
-  const baseText = execFileSync("git", ["-C", dir, "show", `${base}:${loc.path}`], { encoding: "utf8" })
-    .split("\n")
-    .map((l) => l.trim())
-    .join("\n");
-  return baseText.includes(def.join("\n")) ? "SAME AT BASE" : "definition changed";
+  const trimmed = (commit: string) =>
+    execFileSync("git", ["-C", dir, "show", `${commit}:${loc.path}`], { encoding: "utf8" })
+      .split("\n")
+      .map((l) => l.trim())
+      .join("\n");
+  // Methods of several classes can share a definition, so count them.
+  const count = (text: string) => text.split(def.join("\n")).length - 1;
+  return count(trimmed(base)) < count(trimmed(head)) ? "definition changed" : "SAME AT BASE";
+}
+
+/** For a type's fields: each removed field is a member at base and not at head, each added one the other way round. */
+function verifyFields(dir: string, base: string, head: string, f: Finding): string {
+  const name = /`([^`]+)`/.exec(f.message)![1]!;
+  const block = (commit: string) => {
+    const text = execFileSync("git", ["-C", dir, "show", `${commit}:${f.locations[0]!.path}`], { encoding: "utf8" }).split("\n");
+    const start = text.findIndex((l) => new RegExp(`export\\s+(interface|type)\\s+${name}\\b`).test(l));
+    if (start < 0) return undefined;
+    const indent = /^\s*/.exec(text[start]!)![0];
+    const end = text.findIndex((l, i) => i > start && l.startsWith(`${indent}}`));
+    return text.slice(start + 1, end).join("\n");
+  };
+  const before = block(base);
+  const after = block(head);
+  if (before === undefined || after === undefined) return "TYPE NOT FOUND";
+  const member = (b: string, field: string, optional: boolean) =>
+    new RegExp(`^\\s*(readonly\\s+)?["']?${field}["']?${optional ? "\\?" : ""}\\s*[:(<]`, "m").test(b);
+  const removed = [.../removed ([^;]+)/.exec(f.message)?.[1]?.matchAll(/`([^`]+)`/g) ?? []].map((m) => m[1]!);
+  const added = [.../added required ([^;]+)/.exec(f.message)?.[1]?.matchAll(/`([^`]+)`/g) ?? []].map((m) => m[1]!);
+  for (const r of removed) if (!member(before, r, false) && !member(before, r, true)) return `CHECK: ${r} not at base`;
+  for (const r of removed) if (member(after, r, false) || member(after, r, true)) return `CHECK: ${r} still at head`;
+  for (const a of added) if (!member(after, a, false) || member(before, a, false) || member(before, a, true)) return `CHECK: ${a}`;
+  return "fields changed";
 }
 
 const lines: string[] = [

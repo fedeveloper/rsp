@@ -1,0 +1,4 @@
+[
+  {"ruleId": "interface/untested-change", "path": "src/cart.ts", "line": 6, "message": "Parameters of `Cart.constructor`: added `currency=\"EUR\"`; no test changed by the diff mentions it", "evidence": "constructor(private items: Item[] = [], readonly currency = \"EUR\") {}"},
+  {"ruleId": "interface/untested-change", "path": "src/cart.ts", "line": 8, "message": "Parameters of `Cart.add`: added `note?`; no test changed by the diff mentions it", "evidence": "add(item: Item, qty = 1, note?: string): void {"}
+]

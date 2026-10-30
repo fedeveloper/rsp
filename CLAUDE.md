@@ -50,7 +50,7 @@ Passing our own tests proves consistency, not that a rule works on real code. Ev
 
 1. **Golden fixtures.** Add a case per new behaviour (with JUnit reports in `reports/` when the rule reads test results), positive and negative, with expectations written by hand before running the rule. Every case runs every rule, so a rule that fires on another rule's fixture fails too.
 2. **Labelled mutations** (`npm run eval`). Risky and benign changes applied to the sample Python project (`eval/mutations.ts`) and the sample TypeScript service (`eval/mutations-js.ts`); the results file is committed and CI fails if it changes. Corpora built on real applications whose code must not be copied into this public repository live outside it and run with `RSP_EVAL_EXTRA=<file>[:<file>...]`; never commit their mutations, results or names. `tests/delta` is covered by fixtures and Action tests instead, because it needs test runs.
-3. **Real history** (`eval/real-history.ts`). Run the rules on about 100 recent commits of several public projects and check each finding against git independently of the rules. Every false fact found there gets fixed and becomes a golden fixture. This layer is where all false facts so far were found: aliased `TYPE_CHECKING`, optional imports, CI matrix keys, imports inside template literals, helper files in test folders, eslint replaced by oxlint, pnpm lockfiles written as several YAML documents, Yarn Berry keys quoted as a whole.
+3. **Real history** (`eval/real-history.ts`). Run the rules on about 100 recent commits of several public projects and check each finding against git independently of the rules. Every false fact found there gets fixed and becomes a golden fixture. This layer is where all false facts so far were found: aliased `TYPE_CHECKING`, optional imports, CI matrix keys, imports inside template literals, helper files in test folders, eslint replaced by oxlint, pnpm lockfiles written as several YAML documents, Yarn Berry keys quoted as a whole, `@t.overload` not recognized as an overload.
 4. **Action tests** against a fake GitHub API, including a run from the committed bundle, and the `e2e` CI job that runs the Action from `action.yml` on RSP's own pull requests.
 
 On top of these, `eval/swe-bench.ts` runs the rules on SWE-bench Lite: the human fix of each task and the patches of three agent submissions. It is a measurement, not a gate; rerun it when a rule changes and read the new findings. Its first run found more false facts: skip markers and imports inside Python strings, `setup.py` lists built in variables or imported from other modules, `pytest` in test files of projects that declare it outside manifests, methods defined twice, and a backslash-newline that shifted line numbers in the string scanners.
@@ -60,7 +60,7 @@ After changing `src/`, run `npm run bundle` and commit `action-dist/`, because C
 ## Ideas not started
 
 - Per-rule blocking: `fail-on` per rule or per key in `.rsp.toml`, instead of only `never` and `any`.
-- Interface changes beyond parameters: return annotations, removed public functions and classes.
+- Interface changes in Python class attributes, and routes built at run time.
 - More ecosystems (Go, Rust), each with its own manifests and suppressions.
 - Test delta without JUnit: read pytest and Vitest JSON reports directly.
 - Run `tests/delta` in the SWE-bench evaluation, using the task's test commands in the official Docker images.
