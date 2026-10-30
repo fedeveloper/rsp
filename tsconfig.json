@@ -13,6 +13,6 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src", "test", "eval", "scripts"],
-  "exclude": ["test/fixtures", "eval/project", "eval/.cache"]
+  "include": ["src", "test", "eval", "scripts", "docs"],
+  "exclude": ["test/fixtures", "eval/project", "eval/project-js", "eval/.cache"]
 }

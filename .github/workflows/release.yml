@@ -1,0 +1,66 @@
+# Runs when a version tag is pushed: checks the tag, creates the GitHub Release
+# from CHANGELOG.md and moves the major tag (v0) to the same commit, so that
+# `uses: fedeveloper/rsp@v0` follows the latest release. The tag itself is
+# always pushed by a maintainer.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and move the major tag
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # No dependency cache in a job that can write to the repository.
+          node-version: 24
+      - name: Check the tag is on main and matches the version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          commit=$(git rev-parse "$TAG^{commit}")
+          git merge-base --is-ancestor "$commit" origin/main || { echo "::error::$TAG is not on main"; exit 1; }
+          version=$(node -p 'require("./package.json").version')
+          [ "v$version" = "$TAG" ] || { echo "::error::$TAG does not match package.json version $version"; exit 1; }
+          node scripts/release-notes.mjs "$version" > "$RUNNER_TEMP/notes.md"
+      - run: npm ci --ignore-scripts
+      - name: Check the action bundle is up to date
+        run: npm run bundle && git diff --exit-code action-dist
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it as it is."
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+      - name: Move the major tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          commit=$(git rev-parse "$TAG^{commit}")
+          major="${TAG%%.*}"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$major" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$major" -f sha="$commit" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$major" -f sha="$commit" >/dev/null
+          fi
+          echo "$major now points to $commit ($TAG)"

@@ -80,7 +80,7 @@ jobs:
       - uses: fedeveloper/rsp@v0.4.0
 ```
 
-For production use, pin the action to the full commit SHA of a release instead of the tag (`uses: fedeveloper/rsp@<sha> # v0.4.0`), and let Dependabot update it; see [Security](#security).
+For production use, pin the action to the full commit SHA of a release instead of the tag (`uses: fedeveloper/rsp@<sha> # v0.4.0`), and let Dependabot update it; see [Security](#security). To follow every 0.x release without Dependabot, use the major tag `fedeveloper/rsp@v0`, which moves to each new release; [CHANGELOG.md](CHANGELOG.md) lists what changed in each.
 
 On every pull request RSP keeps one comment up to date with its findings, writes the same report to the job summary, adds annotations to the diff and sets two outputs: `findings` (the count) and `report` (the path of the JSON report). When a later push removes every finding, the comment says so instead of disappearing.
 
@@ -371,12 +371,13 @@ The base is resolved to its merge-base with the head, exactly as GitHub computes
 
 Passing its own tests proves that RSP is consistent, not that its rules work on real code. Every rule change goes through four layers, and a fifth evaluation measures RSP on patches written by coding agents.
 
-1. **Golden fixtures** (`test/fixtures/<rule>/<case>/`). Each case is a `base/` tree, a `head/` tree and an `expected.json` written by hand before running the rule. The harness builds a throwaway git repository per case with fixed authors and dates, and runs **every** rule on **every** case, so a rule that fires on another rule's fixture fails too.
+1. **Golden fixtures** (`test/fixtures/<rule>/<case>/`). Each case is a `base/` tree, a `head/` tree, optional JUnit reports in `reports/`, and an `expected.json` written by hand before running the rule. The harness builds a throwaway git repository per case with fixed authors and dates, and runs **every** rule on **every** case, so a rule that fires on another rule's fixture fails too.
 2. **Labelled mutations** (`npm run eval`). Risky and benign changes are applied to each corpus; each risky change must be reported by exactly the expected rules and each benign one by none. CI fails if the results change.
    - A small sample Python project: [eval/RESULTS.md](eval/RESULTS.md).
+   - A small TypeScript web service: [eval/RESULTS_JS.md](eval/RESULTS_JS.md).
    - Corpora built on real applications whose code should not be copied here are kept outside the repository and loaded with `RSP_EVAL_EXTRA=<file>` (see `eval/run.ts`). Their results are not part of CI.
 3. **Real history** (`eval/real-history.ts`). Every rule runs on about 100 recent commits of public projects, and each line-level finding is checked against git independently of the rules: the reported line holds the evidence, the line occurs more often after the commit than before, and for signatures the definition really changed. Python: flask, requests, httpx, fastapi, click ([eval/REAL_HISTORY.md](eval/REAL_HISTORY.md)). JavaScript/TypeScript: express, axios, fastify, vite, outline ([eval/REAL_HISTORY_JS.md](eval/REAL_HISTORY_JS.md)). Every false fact found this way was fixed and became a golden fixture.
-4. **Action tests** against a fake GitHub API: comment created, updated and cleared, read-only tokens, `fail-on`, invalid configuration, the test command at base and head with a flaky rerun, and one run from the committed bundle.
+4. **Action tests** against a fake GitHub API: comment created, updated and cleared, read-only tokens, `fail-on`, invalid configuration, the test command at base and head with a flaky rerun, and one run from the committed bundle. On every pull request of RSP itself, an end-to-end job also runs the Action from `action.yml` on a real runner, compares its report with the CLI on the same commits and checks that the test command saw no tokens.
 
 ### Patches written by coding agents
 
@@ -449,7 +450,7 @@ A warning implies the change is wrong. "Added pytest skip marker" is simply true
 npm ci
 npm run typecheck
 npm test
-npm run eval      # labelled mutations; RSP_EVAL_EXTRA=<file> adds a corpus kept outside the repository
+npm run eval      # labelled mutations on eval/project and eval/project-js; RSP_EVAL_EXTRA=<file> adds a corpus kept outside the repository
 npm run bundle    # rebuild action-dist/ after changing src/; CI checks it is up to date
 node --import tsx eval/real-history.ts --commits 100 --out eval/REAL_HISTORY.md <repo-dirs>
 node --import tsx eval/swe-bench.ts
@@ -457,7 +458,7 @@ node --import tsx eval/swe-bench.ts
 
 TypeScript on Node 22 or later, ESM, with `smol-toml` as the only runtime dependency. The core (`src/engine.ts`, `src/context.ts`, `src/git.ts`, `src/diff.ts`) turns two commits into a diff context and sorted findings; each rule in `src/rules/` is a pure function of that context. The Action (`src/action.ts`) and the CLI (`src/cli.ts`) are thin wrappers around the same core. [CLAUDE.md](CLAUDE.md) records why things are built the way they are and how changes are expected to be validated.
 
-Releases are git tags `vX.Y.Z` on `main`; the version lives in `package.json` and `src/version.ts`, and a test keeps them in sync.
+Releases are git tags `vX.Y.Z` on `main`; the version lives in `package.json` and `src/version.ts`, and a test keeps them in sync with [CHANGELOG.md](CHANGELOG.md). Pushing the tag runs `.github/workflows/release.yml`, which creates the GitHub Release from the CHANGELOG section and moves the major tag `v0` to the same commit. [docs/WRITING-RULES.md](docs/WRITING-RULES.md) explains how to write a rule and validate it.
 
 ## License
 

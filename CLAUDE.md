@@ -18,7 +18,7 @@ The name is **RSP: Reproducible Shortcut Patrol** (chosen 2026-10-21). The comma
 - Configuration: `.rsp.toml` (TOML, because `smol-toml` is already the one dependency), read from the base commit so a pull request cannot relax its own checks. Unknown keys, rules and pattern ids are errors. Each finding has a `key` that `allow` matches.
 - Test delta: rsp never runs tests itself in the core. `tests/delta` compares JUnit XML reports of base and head; the Action can run a `test-command` at both commits in git worktrees and rerun head to clear flaky failures.
 - License: Apache-2.0.
-- Releases are git tags `vX.Y.Z` on `main`. The version lives in `package.json` and `src/version.ts`, and a test keeps them in sync.
+- Releases are git tags `vX.Y.Z` on `main`, pushed by the maintainer. The version lives in `package.json` and `src/version.ts`, and a test keeps them in sync with `CHANGELOG.md`, whose section becomes the release notes. `.github/workflows/release.yml` creates the release and moves the major tag `v0`.
 - The maintainer writes in Italian. Code, comments, commits and docs in the repository are in English.
 
 ## Principles that constrain every change
@@ -41,15 +41,17 @@ The name is **RSP: Reproducible Shortcut Patrol** (chosen 2026-10-21). The comma
 - `src/report/`: JSON and Markdown output. `src/action.ts`: the GitHub Action (sticky PR comment, job summary, annotations).
 - `test/fixtures/<rule>/<case>/`: golden cases, each with `base/`, `head/` and a hand-written `expected.json`.
 - `eval/`: evaluation corpora and reports (see below).
+- `docs/WRITING-RULES.md`: how to write and validate a rule, with an example rule that `test/docs-example.test.ts` runs.
+- `CHANGELOG.md`: every release, with rule versions and fixed false facts. Add an entry under Unreleased with each change.
 
 ## How a rule change is validated
 
 Passing our own tests proves consistency, not that a rule works on real code. Every rule change goes through all four layers:
 
-1. **Golden fixtures.** Add a case per new behaviour, positive and negative, with expectations written by hand before running the rule. Every case runs every rule, so a rule that fires on another rule's fixture fails too.
-2. **Labelled mutations** (`npm run eval`). Risky and benign changes applied to the sample Python project (`eval/mutations.ts`); the results file is committed and CI fails if it changes. Corpora built on real applications whose code must not be copied into this public repository live outside it and run with `RSP_EVAL_EXTRA=<file>[:<file>...]`; never commit their mutations, results or names. `tests/delta` is covered by fixtures and Action tests instead, because it needs test runs.
+1. **Golden fixtures.** Add a case per new behaviour (with JUnit reports in `reports/` when the rule reads test results), positive and negative, with expectations written by hand before running the rule. Every case runs every rule, so a rule that fires on another rule's fixture fails too.
+2. **Labelled mutations** (`npm run eval`). Risky and benign changes applied to the sample Python project (`eval/mutations.ts`) and the sample TypeScript service (`eval/mutations-js.ts`); the results file is committed and CI fails if it changes. Corpora built on real applications whose code must not be copied into this public repository live outside it and run with `RSP_EVAL_EXTRA=<file>[:<file>...]`; never commit their mutations, results or names. `tests/delta` is covered by fixtures and Action tests instead, because it needs test runs.
 3. **Real history** (`eval/real-history.ts`). Run the rules on about 100 recent commits of several public projects and check each finding against git independently of the rules. Every false fact found there gets fixed and becomes a golden fixture. This layer is where all false facts so far were found: aliased `TYPE_CHECKING`, optional imports, CI matrix keys, imports inside template literals, helper files in test folders, eslint replaced by oxlint.
-4. **Action tests** against a fake GitHub API, including a run from the committed bundle.
+4. **Action tests** against a fake GitHub API, including a run from the committed bundle, and the `e2e` CI job that runs the Action from `action.yml` on RSP's own pull requests.
 
 On top of these, `eval/swe-bench.ts` runs the rules on SWE-bench Lite: the human fix of each task and the patches of three agent submissions. It is a measurement, not a gate; rerun it when a rule changes and read the new findings. Its first run found more false facts: skip markers and imports inside Python strings, `setup.py` lists built in variables or imported from other modules, `pytest` in test files of projects that declare it outside manifests, methods defined twice, and a backslash-newline that shifted line numbers in the string scanners.
 

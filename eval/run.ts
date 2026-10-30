@@ -2,8 +2,9 @@
 // resulting diff and writes one results file per corpus. Exits 1 if any rule
 // misses a risky mutation or reports on a mutation it was not expected to.
 //
-// The corpus in this repository is the sample Python project in eval/project
-// (eval/RESULTS.md). RSP_EVAL_EXTRA adds corpora kept outside the repository,
+// The corpora in this repository are the sample Python project in
+// eval/project (eval/RESULTS.md) and the sample TypeScript service in
+// eval/project-js (eval/RESULTS_JS.md). RSP_EVAL_EXTRA adds corpora kept outside the repository,
 // such as real applications whose code should not be copied here: a list of
 // files separated by the path delimiter, each with a default export that
 // receives the mutation helpers and returns { repo, commit, describe,
@@ -18,6 +19,7 @@ import { ALL_RULES } from "../src/rules/index.js";
 import type { Finding } from "../src/types.js";
 import { VERSION } from "../src/version.js";
 import { makeRepoFromTrees } from "../test/helpers.js";
+import { MUTATIONS_JS } from "./mutations-js.js";
 import * as helpers from "./mutations.js";
 import { type Files, MUTATIONS, type Mutation } from "./mutations.js";
 
@@ -149,6 +151,13 @@ const corpora: Corpus[] = [
     files: readTree(join(import.meta.dirname, "project")),
     mutations: MUTATIONS,
     results: join(import.meta.dirname, "RESULTS.md"),
+  },
+  {
+    describe: "the sample TypeScript web service in `eval/project-js`",
+    source: "eval/mutations-js.ts",
+    files: readTree(join(import.meta.dirname, "project-js")),
+    mutations: MUTATIONS_JS,
+    results: join(import.meta.dirname, "RESULTS_JS.md"),
   },
 ];
 for (const path of (process.env.RSP_EVAL_EXTRA ?? "").split(delimiter).filter(Boolean)) {

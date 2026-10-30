@@ -28,3 +28,4 @@ jobs:
           exclude: |
             test/fixtures/**
             eval/project/**
+            eval/project-js/**

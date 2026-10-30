@@ -36,4 +36,83 @@ jobs:
       - name: Check the action bundle is up to date
         run: npm run bundle && git diff --exit-code action-dist
       - name: Check the evaluation results are up to date
-        run: npm run eval && git diff --exit-code eval/RESULTS.md
+        run: npm run eval && git diff --exit-code eval/RESULTS.md eval/RESULTS_JS.md
+
+  # Runs the Action from action.yml on a real runner, as users do, and checks
+  # what the unit tests can only simulate: the inputs and outputs, the report
+  # against the CLI on the same commits, and the environment of test-command.
+  e2e:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts && npm run build
+      - uses: ./
+        id: rsp
+        with:
+          comment: false
+          # Only the report of this run, not the JUnit files kept as test fixtures.
+          junit: junit.xml
+          exclude: |
+            test/fixtures/**
+            eval/project/**
+            eval/project-js/**
+          test-command: >-
+            env > "$RUNNER_TEMP/rsp-test-env.txt" &&
+            npm ci --ignore-scripts &&
+            node --import tsx --test --test-reporter=junit --test-reporter-destination=junit.xml test/*.test.ts
+      - name: The report matches the CLI on the same commits
+        env:
+          REPORT: ${{ steps.rsp.outputs.report }}
+          FINDINGS: ${{ steps.rsp.outputs.findings }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          junit=()
+          for f in "$RUNNER_TEMP"/rsp-junit/base-*.xml; do junit+=(--junit-base "$f"); done
+          for f in "$RUNNER_TEMP"/rsp-junit/head-*.xml; do junit+=(--junit-head "$f"); done
+          # Both test runs must have written a report, or tests/delta did not run.
+          ls "$RUNNER_TEMP"/rsp-junit/base-0-0.xml "$RUNNER_TEMP"/rsp-junit/head-0-0.xml
+          node dist/cli.js check --base "$BASE" --head "$HEAD" --format json \
+            --exclude 'test/fixtures/**' --exclude 'eval/project/**' --exclude 'eval/project-js/**' \
+            "${junit[@]}" > "$RUNNER_TEMP/cli.json"
+          diff <(jq -S . "$REPORT") <(jq -S . "$RUNNER_TEMP/cli.json")
+          [ "$FINDINGS" = "$(jq '.findings | length' "$REPORT")" ]
+      - name: The test command ran without tokens or step files
+        run: |
+          test -s "$RUNNER_TEMP/rsp-test-env.txt"
+          leaked=$(grep -E '^(INPUT_[A-Z_-]+|ACTIONS_[A-Z_]+|GITHUB_(TOKEN|ENV|OUTPUT|PATH|STATE|STEP_SUMMARY))=' "$RUNNER_TEMP/rsp-test-env.txt" | cut -d= -f1 || true)
+          if [ -n "$leaked" ]; then
+            echo "::error::the test command saw: $(echo $leaked)"
+            exit 1
+          fi
+
+  # On a push there is no pull request: the Action must say so and succeed.
+  e2e-push:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./
+        id: rsp
+        with:
+          comment: false
+      - name: No report on an event without a pull request
+        env:
+          FINDINGS: ${{ steps.rsp.outputs.findings }}
+        run: '[ -z "$FINDINGS" ]'
