@@ -91,9 +91,9 @@ jobs:
       - name: The test command ran without tokens or step files
         run: |
           test -s "$RUNNER_TEMP/rsp-test-env.txt"
-          leaked=$(grep -E '^(INPUT_[A-Z_-]+|ACTIONS_[A-Z_]+|GITHUB_(TOKEN|ENV|OUTPUT|PATH|STATE|STEP_SUMMARY))=' "$RUNNER_TEMP/rsp-test-env.txt" | cut -d= -f1 || true)
-          if [ -n "$leaked" ]; then
-            echo "::error::the test command saw: $(echo $leaked)"
+          pattern='^(INPUT_[A-Z_-]+|ACTIONS_[A-Z_]+|GITHUB_(TOKEN|ENV|OUTPUT|PATH|STATE|STEP_SUMMARY))='
+          if grep -qE "$pattern" "$RUNNER_TEMP/rsp-test-env.txt"; then
+            echo "::error::the test command saw: $(grep -E "$pattern" "$RUNNER_TEMP/rsp-test-env.txt" | cut -d= -f1 | tr '\n' ' ')"
             exit 1
           fi
 
