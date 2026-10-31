@@ -15,6 +15,12 @@ The section of a version is the body of its GitHub Release.
 - New rule `interface/route-removed` 0.1.0: HTTP routes with a literal path (Flask, FastAPI, Django, Express, Fastify and similar routers) removed or given another method, and declared by no file at head.
 - `interface/untested-change` 0.2.0 also compares the constructors of dataclasses, attrs classes and Pydantic models, constructors and public methods of exported TypeScript classes, fields of exported TypeScript interfaces and object types (removed, added as required, made required), and return annotations. Keys can now be type names.
 
+- Go:
+  - `deps/undeclared`: import paths added in `.go` files checked against the `require` and `replace` directives of the nearest `go.mod`, with the standard library, the repository's own modules, `vendor/` and `testdata/` left out.
+  - `deps/lockfile`: modules required by an added `go.mod` line at a version `go.sum` has no line for.
+  - `checks/disabled` 0.4.0: `//nolint`, `//lint:ignore`, `#nosec`, `t.Skip` in `_test.go` files, deleted `_test.go` files, and `go test`, `go vet`, `golangci-lint`, `staticcheck`, `gofmt`, `gosec` and `govulncheck` as CI checks. Go tests are not counted for fewer assertions.
+  - `env/missing-example` 0.3.0: `os.Getenv`, `os.LookupEnv` and `syscall.Getenv`.
+  - A sample Go service in the evaluation, `eval/project-go/`, with its own labelled mutations, and real history on five Go projects (`eval/REAL_HISTORY_GO.md`).
 - New rule `tests/uncovered-change` 0.1.0: added lines that the coverage report of the tests at head (LCOV or Cobertura) measures and that did not run, one fact per file. It runs only with `--coverage` or the Action's `coverage` input.
 - `tests/delta` 0.2.0: tests that failed and also passed at head, on a rerun or through the runner's own retries (pytest-rerunfailures, Maven Surefire), are listed in the report under `tests.flaky` and below the table, not as findings. A head report cut off while it was written is listed under `tests.incomplete`, and missing tests are then not reported. JUnit reports with a byte order mark are read.
 

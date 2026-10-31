@@ -1225,6 +1225,140 @@ function coverageByRepoPath(reports, repoFiles) {
   return out;
 }
 
+// src/rules/go.ts
+var GO_FILE = /\.go$/;
+var GO_TEST_FILE = /_test\.go$/;
+function goNonCodeLines(text) {
+  const out = /* @__PURE__ */ new Set();
+  let line = 1;
+  let state = "code";
+  let lineHasCode = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\n") {
+      if ((state === "raw" || state === "block") && !lineHasCode) out.add(line);
+      if (state === "line-comment" || state === "string" || state === "rune") state = "code";
+      line++;
+      lineHasCode = false;
+      continue;
+    }
+    if (state === "code") {
+      if (c === "/" && text[i + 1] === "/") state = "line-comment";
+      else if (c === "/" && text[i + 1] === "*") {
+        state = "block";
+        i++;
+      } else if (c === "`") state = "raw";
+      else if (c === '"') state = "string";
+      else if (c === "'") state = "rune";
+      if (state === "code" && !/\s/.test(c)) lineHasCode = true;
+      if (state !== "code") lineHasCode = true;
+    } else if (state === "raw") {
+      if (c === "`") {
+        state = "code";
+        lineHasCode = true;
+      }
+    } else if (state === "block") {
+      if (c === "*" && text[i + 1] === "/") {
+        state = "code";
+        lineHasCode = true;
+        i++;
+      }
+    } else if (state === "string" || state === "rune") {
+      if (c === "\\") i++;
+      else if (state === "string" && c === '"' || state === "rune" && c === "'") state = "code";
+    }
+  }
+  return out;
+}
+function blankGoStrings(line) {
+  return line.replace(/"(?:[^"\\]|\\.)*"|`[^`]*`|'(?:[^'\\]|\\.)*'/g, (m) => m[0] + m[m.length - 1]);
+}
+function goImports(text) {
+  const lines = text.split("\n");
+  const nonCode = goNonCodeLines(text);
+  const out = [];
+  let inBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (nonCode.has(i + 1)) continue;
+    const line = lines[i].replace(/\/\/.*$/, "");
+    if (inBlock) {
+      if (/^\s*\)/.test(line)) {
+        inBlock = false;
+        continue;
+      }
+      const m = /^\s*(?:[\w.]+\s+)?"([^"]+)"\s*;?\s*$/.exec(line);
+      if (m) out.push({ path: m[1], line: i + 1 });
+      continue;
+    }
+    if (/^import\s*\(\s*$/.test(line)) {
+      inBlock = true;
+      continue;
+    }
+    const single = /^import\s+(?:[\w.]+\s+)?"([^"]+)"\s*;?\s*$/.exec(line);
+    if (single) out.push({ path: single[1], line: i + 1 });
+    if (/^(func|type|var|const)\b/.test(line)) break;
+  }
+  return out;
+}
+function isGoStdlib(path) {
+  return path === "C" || !path.split("/")[0].includes(".");
+}
+function goEnvReads(line) {
+  return [...line.matchAll(/\b(?:os\.(?:Getenv|LookupEnv)|syscall\.Getenv)\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*\)/g)].map((m) => m[1]);
+}
+function parseGoMod(text, path) {
+  const mod = { path, module: "", require: /* @__PURE__ */ new Map(), replace: /* @__PURE__ */ new Map(), lines: /* @__PURE__ */ new Map() };
+  let block;
+  text.split("\n").forEach((raw, i) => {
+    const line = raw.replace(/\/\/.*$/, "").trim();
+    if (!line) return;
+    if (block) {
+      if (line === ")") block = void 0;
+      else entry(block, line, i + 1);
+      return;
+    }
+    const m = /^(module|require|replace|exclude|retract|go|toolchain|godebug|tool|ignore)\b\s*(.*)$/.exec(line);
+    if (!m) return;
+    if (m[2] === "(") block = m[1];
+    else entry(m[1], m[2], i + 1);
+  });
+  return mod.module ? mod : void 0;
+  function entry(kind2, rest, n) {
+    const words = rest.split(/\s+/).map(unquote2);
+    if (kind2 === "module") mod.module = words[0] ?? "";
+    else if (kind2 === "require" && words[0] && words[1]) {
+      mod.require.set(words[0], words[1]);
+      mod.lines.set(words[0], n);
+    } else if (kind2 === "replace") {
+      const arrow = words.indexOf("=>");
+      const target = words[arrow + 1];
+      if (arrow > 0 && target) mod.replace.set(words[0], { local: /^\.{0,2}\//.test(target) });
+    }
+  }
+}
+function unquote2(s) {
+  return s.replace(/^"(.*)"$/, "$1");
+}
+function goModules(ctx) {
+  return ctx.listHead().filter((p) => p === "go.mod" || p.endsWith("/go.mod")).flatMap((p) => parseGoMod(ctx.readHead(p) ?? "", p) ?? []);
+}
+function moduleFor(mods, file) {
+  let best;
+  for (const m of mods) {
+    const dir = m.path.slice(0, -"go.mod".length);
+    if (file.startsWith(dir) && (!best || dir.length > best.path.length - "go.mod".length)) best = m;
+  }
+  return best;
+}
+function goSumEntries(text) {
+  const out = /* @__PURE__ */ new Set();
+  for (const line of text.split("\n")) {
+    const [path, version] = line.trim().split(/\s+/);
+    if (path && version) out.add(`${path} ${version.replace(/\/go\.mod$/, "")}`);
+  }
+  return out;
+}
+
 // src/rules/js.ts
 var JS_FILE = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts|vue|svelte)$/;
 var STATIC_IMPORTS = [
@@ -1593,6 +1727,14 @@ var JS_PATTERNS = [
   { id: "biome-ignore", label: "biome-ignore comment", regex: /(\/\/|\/\*)\s*biome-ignore\b/ },
   { id: "coverage-exclusion", label: "coverage exclusion", regex: /(\/\/|\/\*)\s*(istanbul|c8|v8)\s+ignore\b/ }
 ];
+var GO_PATTERNS = [
+  { id: "nolint", label: "nolint comment", regex: /\/\/\s*nolint\b/ },
+  { id: "lint-ignore", label: "staticcheck lint:ignore comment", regex: /\/\/\s*lint:(ignore|file-ignore)\b/ },
+  { id: "nosec", label: "gosec nosec comment", regex: /(\/\/|\/\*)\s*#?nosec\b/ }
+];
+var GO_TEST_PATTERNS = [
+  { id: "go-test-skip", label: "skipped Go test (`Skip`)", regex: /\.(Skip|Skipf|SkipNow)\(/ }
+];
 var JS_TEST_PATTERNS = [
   { id: "test-skip", label: "skipped test (`.skip`)", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.(skip|skipIf|fixme)\b/ },
   { id: "test-only", label: "focused test (`.only`), which skips the others", regex: /(^|[^\w.$])(describe|it|test|context|suite)\.only\b/ },
@@ -1643,6 +1785,11 @@ var CHECK_KIND = {
   oxlint: "lint",
   biome: "lint",
   "lint script": "lint",
+  "golangci-lint": "lint",
+  staticcheck: "lint",
+  "go vet": "lint",
+  "go test": "test",
+  gofmt: "format",
   mypy: "types",
   pyright: "types",
   tsc: "types",
@@ -1653,7 +1800,7 @@ var CHECK_KIND = {
   prettier: "format"
 };
 var CHECK_COMMAND = new RegExp(
-  "\\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome)\\b|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b|\\b(node)(?:\\s+-[^\\s&|;]+(?:\\s+[^-\\s&|;][^\\s&|;]*)?)*?\\s+--test\\b|\\b(deno|bun)\\s+test\\b"
+  "\\b(pytest|tox|nox|ruff|flake8|mypy|pyright|pylint|black|isort|bandit|coverage|unittest|jest|vitest|mocha|ava|eslint|oxlint|tsc|prettier|playwright|cypress|biome|golangci-lint|staticcheck|gofmt|gosec|govulncheck)\\b|\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(test|lint|typecheck|type-check|check)\\b|\\b(node)(?:\\s+-[^\\s&|;]+(?:\\s+[^-\\s&|;][^\\s&|;]*)?)*?\\s+--test\\b|\\b(deno|bun)\\s+test\\b|\\bgo\\s+(test|vet)\\b"
 );
 var CHECK_COMMAND_ALL = new RegExp(CHECK_COMMAND.source, "g");
 var COVERAGE_THRESHOLD = /(?:fail_under|fail-under|--cov-fail-under)\s*[=:]?\s*["']?(\d+(?:\.\d+)?)/;
@@ -1669,7 +1816,7 @@ var TSCONFIG_FILE = /(^|\/)[jt]sconfig[\w.-]*\.json$/;
 var ESLINT_CONFIG_FILE = /(^|\/)(eslint\.config\.[cm]?[jt]s|\.eslintrc(\.(json|js|cjs|yml|yaml))?)$/;
 var KNOWN_KEYS = [
   .../* @__PURE__ */ new Set([
-    ...[PYTHON_PATTERNS, JS_PATTERNS, JS_TEST_PATTERNS, WORKFLOW_PATTERNS, TEST_CONFIG_PATTERNS].flat().map((p) => p.id),
+    ...[PYTHON_PATTERNS, JS_PATTERNS, JS_TEST_PATTERNS, GO_PATTERNS, GO_TEST_PATTERNS, WORKFLOW_PATTERNS, TEST_CONFIG_PATTERNS].flat().map((p) => p.id),
     ...[PACKAGE_JSON_PATTERNS, TSCONFIG_PATTERNS, ESLINT_CONFIG_PATTERNS].flat().map((p) => p.id),
     "test-file-deleted",
     "fewer-assertions",
@@ -1680,10 +1827,10 @@ var KNOWN_KEYS = [
 ].sort();
 var checksDisabled = {
   id: "checks/disabled",
-  version: "0.3.0",
+  version: "0.4.0",
   keys: "a pattern id, e.g. `type-ignore` or `eslint-disable`",
   knownKeys: KNOWN_KEYS,
-  description: "Checks that were removed or switched off: deleted test files, fewer assertions, skip markers, lint and type suppressions, CI steps or package.json scripts removed or allowed to fail, lower coverage thresholds, TypeScript and ESLint checks turned off.",
+  description: "Checks that were removed or switched off: deleted test files, fewer assertions, skip markers, lint and type suppressions, CI steps or package.json scripts removed or allowed to fail, lower coverage thresholds, TypeScript and ESLint checks turned off; Python, JavaScript/TypeScript and Go.",
   run(ctx) {
     const findings = [];
     const removedSource = multiset(ctx.files.filter((f) => isSource(f.path) || isSource(f.oldPath)), "del");
@@ -1691,6 +1838,7 @@ var checksDisabled = {
       if (file.binary) continue;
       if (file.path.endsWith(".py")) findings.push(...pythonFile(ctx, file, removedSource));
       if (JS_FILE.test(file.path)) findings.push(...jsFile(ctx, file, removedSource));
+      if (GO_FILE.test(file.path)) findings.push(...goFile(ctx, file, removedSource));
       if (WORKFLOW_FILE.test(file.path)) findings.push(...workflowFile(file));
       if (TEST_CONFIG_FILE.test(file.path)) findings.push(...testConfigFile(ctx, file));
       if (file.path.split("/").pop() === "package.json") findings.push(...packageJsonFile(ctx, file));
@@ -1716,6 +1864,14 @@ function jsFile(ctx, file, removed) {
   const patterns = inTests ? [...JS_PATTERNS.filter((p) => p.id !== "ts-expect-error"), ...JS_TEST_PATTERNS] : JS_PATTERNS;
   const nonCode = nonCodeLines(ctx.readHead(file.path) ?? "");
   return matchAdded(file, patterns, removed, (l) => nonCode.has(l.newLine) ? "" : blankStrings(l.text));
+}
+function goFile(ctx, file, removed) {
+  if (file.status === "deleted") {
+    return GO_TEST_FILE.test(file.path) ? [{ key: "test-file-deleted", message: "Test file deleted", locations: [{ path: file.path }], evidence: `deleted: ${file.path}` }] : [];
+  }
+  const patterns = GO_TEST_FILE.test(file.path) ? [...GO_PATTERNS, ...GO_TEST_PATTERNS] : GO_PATTERNS;
+  const nonCode = goNonCodeLines(ctx.readHead(file.path) ?? "");
+  return matchAdded(file, patterns, removed, (l) => nonCode.has(l.newLine) ? "" : blankGoStrings(l.text));
 }
 function packageJsonFile(ctx, file) {
   const findings = matchAdded(file, PACKAGE_JSON_PATTERNS);
@@ -1829,10 +1985,12 @@ function isShellLine(line) {
   return !/^\s*(-\s*)?([\w-]+\s*:|[{[])/.test(line);
 }
 function checkCommands(line) {
-  return [...line.matchAll(CHECK_COMMAND_ALL)].map((m) => m[1] ?? (m[2] ? `${m[2]} script` : m[3] ? "node --test" : `${m[4]} test`));
+  return [...line.matchAll(CHECK_COMMAND_ALL)].map(
+    (m) => m[1] ?? (m[2] ? `${m[2]} script` : m[3] ? "node --test" : m[4] ? `${m[4]} test` : `go ${m[5]}`)
+  );
 }
 function isSource(path) {
-  return path.endsWith(".py") || JS_FILE.test(path);
+  return path.endsWith(".py") || JS_FILE.test(path) || GO_FILE.test(path);
 }
 function kind(command) {
   return CHECK_KIND[command] ?? command;
@@ -1912,7 +2070,7 @@ function pnpmLock(text, dir) {
       if (line.trim() === "") continue;
       if (/^\S/.test(line)) break;
       const indent = line.length - line.trimStart().length;
-      const key = unquote2(line.trim().replace(/:.*$/, ""));
+      const key = unquote3(line.trim().replace(/:.*$/, ""));
       const value = line.includes(":") ? line.slice(line.indexOf(":") + 1).trim() : "";
       if (indent === 2) {
         inImporter = key === want;
@@ -1926,7 +2084,7 @@ function pnpmLock(text, dir) {
         name = key;
       } else if (indent === 8 && field && name && key === "specifier") {
         if (!ranges.has(field)) ranges.set(field, /* @__PURE__ */ new Map());
-        ranges.get(field).set(name, unquote2(value));
+        ranges.get(field).set(name, unquote3(value));
       }
     }
   }
@@ -1947,7 +2105,7 @@ function yarnLock(text) {
     mirrors: false
   };
 }
-function unquote2(s) {
+function unquote3(s) {
   return s.replace(/^(['"])(.*)\1$/, "$2");
 }
 function uvLock(text, project, dir) {
@@ -2001,8 +2159,8 @@ var LOCAL_RANGE = /^(workspace:|file:|link:|portal:|patch:|git|github:|https?:|c
 var depsLockfile = {
   id: "deps/lockfile",
   version: "0.1.0",
-  keys: "the package name, e.g. `zod` or `httpx`",
-  description: "Dependencies added, changed or removed in package.json, pyproject.toml or Pipfile by the diff that the lockfile next to them (package-lock.json, pnpm-lock.yaml, yarn.lock, uv.lock, poetry.lock, pdm.lock, Pipfile.lock) does not match. Only lockfiles that existed at base and that rsp can read.",
+  keys: "the package name or Go module path, e.g. `zod` or `httpx`",
+  description: "Dependencies added, changed or removed in package.json, pyproject.toml, Pipfile or go.mod by the diff that the lockfile next to them (package-lock.json, pnpm-lock.yaml, yarn.lock, uv.lock, poetry.lock, pdm.lock, Pipfile.lock, go.sum) does not match. Only lockfiles that existed at base and that rsp can read.",
   run(ctx) {
     const findings = [];
     for (const file of ctx.files) {
@@ -2011,6 +2169,7 @@ var depsLockfile = {
       if (name === "package.json") findings.push(...javascript(ctx, file));
       else if (name === "pyproject.toml") findings.push(...pyproject(ctx, file));
       else if (name === "Pipfile") findings.push(...pipfile(ctx, file));
+      else if (name === "go.mod") findings.push(...goMod(ctx, file));
     }
     return findings;
   }
@@ -2155,6 +2314,29 @@ function pipfile(ctx, file) {
   if (!before || !after || ctx.readBase(lockPath) === void 0 || ctx.readHead(lockPath) === void 0) return [];
   const view = pipfileLock(ctx.readHead(lockPath));
   return view ? compareNames(file, lockPath, "Pipfile.lock", before, after, view, /[A-Za-z0-9][A-Za-z0-9._-]*/g) : [];
+}
+function goMod(ctx, file) {
+  const before = parseGoMod(ctx.readBase(file.oldPath) ?? "", file.oldPath);
+  const after = parseGoMod(ctx.readHead(file.path) ?? "", file.path);
+  const sumPath = `${dirOf(file.path)}go.sum`;
+  const sumText = ctx.readHead(sumPath);
+  if (!before || !after || sumText === void 0 || ctx.readBase(sumPath) === void 0) return [];
+  const sums = goSumEntries(sumText);
+  const added = new Set(file.lines.filter((l) => l.kind === "add").map((l) => l.newLine));
+  const lines = (ctx.readHead(file.path) ?? "").split("\n");
+  const findings = [];
+  for (const [path, version] of after.require) {
+    const line = after.lines.get(path);
+    if (before.require.get(path) === version || !added.has(line)) continue;
+    if (after.replace.has(path) || sums.has(`${path} ${version}`)) continue;
+    findings.push({
+      key: path,
+      message: `Requires ${codeSpan(path)} ${codeSpan(version)} in go.mod; go.sum has no line for it`,
+      locations: [{ path: file.path, line }, { path: sumPath }],
+      evidence: lines[line - 1].trim()
+    });
+  }
+  return findings;
 }
 function compareNames(file, lockPath, lockName, before, after, view, word) {
   const mentions2 = (text, name) => [...text.matchAll(word)].some((m) => normalizeDist(m[0]) === name);
@@ -2801,10 +2983,10 @@ var KNOWN_DISTRIBUTIONS = {
 var depsUndeclared = {
   id: "deps/undeclared",
   version: "0.4.0",
-  keys: "the imported module (Python) or package (JavaScript), e.g. `boto3`",
-  description: "Python and JavaScript/TypeScript imports added in the diff whose package is not declared in a dependency manifest.",
+  keys: "the imported module (Python), package (JavaScript) or import path (Go), e.g. `boto3`",
+  description: "Python, JavaScript/TypeScript and Go imports added in the diff whose package or module is not declared in a dependency manifest (go.mod for Go).",
   run(ctx) {
-    return [...python(ctx), ...javascript2(ctx)];
+    return [...python(ctx), ...javascript2(ctx), ...go(ctx)];
   }
 };
 var PYTHON_TEST_PATH = /(^|\/)(tests?|testing)\/|(^|\/)(test_[^/]*|[^/]*_test|conftest)\.py$/;
@@ -2870,6 +3052,34 @@ function javascript2(ctx) {
   }
   return findings;
 }
+function go(ctx) {
+  const goFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && GO_FILE.test(f.path));
+  if (goFiles.length === 0) return [];
+  const mods = goModules(ctx);
+  const own = mods.map((m) => m.module);
+  const under = (path, mod) => path === mod || path.startsWith(`${mod}/`);
+  const findings = [];
+  for (const file of goFiles) {
+    if (/(^|\/)(vendor|testdata)\//.test(file.path)) continue;
+    const mod = moduleFor(mods, file.path);
+    if (!mod) continue;
+    const added = new Set(file.lines.filter((l) => l.kind === "add").map((l) => l.newLine));
+    const text = ctx.readHead(file.path) ?? "";
+    const lines = text.split("\n");
+    for (const imp of goImports(text)) {
+      if (!added.has(imp.line) || isGoStdlib(imp.path)) continue;
+      if (own.some((m) => under(imp.path, m))) continue;
+      if ([...mod.require.keys(), ...mod.replace.keys()].some((r) => under(imp.path, r))) continue;
+      findings.push({
+        key: imp.path,
+        message: `Imports ${codeSpan(imp.path)}, not required in ${mod.path}`,
+        locations: [{ path: file.path, line: imp.line }],
+        evidence: lines[imp.line - 1].trim()
+      });
+    }
+  }
+  return findings;
+}
 function typesPackage(name) {
   return `@types/${name.startsWith("@") ? name.slice(1).replace("/", "__") : name}`;
 }
@@ -2920,14 +3130,25 @@ var STANDARD = /* @__PURE__ */ new Set([
   "TMPDIR",
   "TZ",
   "USER",
-  "VIRTUAL_ENV"
+  "VIRTUAL_ENV",
+  "CGO_ENABLED",
+  "GOARCH",
+  "GOCACHE",
+  "GODEBUG",
+  "GOFLAGS",
+  "GOMAXPROCS",
+  "GOMEMLIMIT",
+  "GOOS",
+  "GOPATH",
+  "GOPROXY",
+  "GOROOT"
 ]);
 var STANDARD_PREFIXES = ["GITHUB_", "RUNNER_", "LC_", "npm_"];
 var envMissingExample = {
   id: "env/missing-example",
-  version: "0.2.0",
+  version: "0.3.0",
   keys: "the variable name, e.g. `AWS_REGION`",
-  description: "Environment variables read in added Python or JavaScript/TypeScript code but missing from the example env file.",
+  description: "Environment variables read in added Python, JavaScript/TypeScript or Go code but missing from the example env file.",
   run(ctx) {
     const sources = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && envReader(f.path));
     if (sources.length === 0) return [];
@@ -2950,7 +3171,8 @@ var envMissingExample = {
     const findings = [];
     for (const file of sources) {
       const read = envReader(file.path);
-      const nonCode = JS_FILE.test(file.path) ? nonCodeLines(ctx.readHead(file.path) ?? "") : /* @__PURE__ */ new Set();
+      const text = ctx.readHead(file.path) ?? "";
+      const nonCode = JS_FILE.test(file.path) ? nonCodeLines(text) : GO_FILE.test(file.path) ? goNonCodeLines(text) : /* @__PURE__ */ new Set();
       for (const l of file.lines) {
         if (l.kind !== "add" || nonCode.has(l.newLine)) continue;
         for (const name of new Set(read(l.text))) {
@@ -2973,6 +3195,7 @@ function isStandard(name) {
 function envReader(path) {
   if (path.endsWith(".py")) return envVarReads2;
   if (JS_FILE.test(path)) return envVarReads;
+  if (GO_FILE.test(path)) return goEnvReads;
   return void 0;
 }
 

@@ -1,0 +1,3 @@
+[
+  {"ruleId": "env/missing-example", "path": "config.go", "line": 7, "message": "Reads environment variable `API_TOKEN`, missing from .env.example", "evidence": "token, _ := os.LookupEnv(\"API_TOKEN\")"}
+]

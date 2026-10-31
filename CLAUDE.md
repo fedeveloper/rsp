@@ -13,7 +13,7 @@ The name is **RSP: Reproducible Shortcut Patrol** (chosen 2026-10-21). The comma
 ## Decisions
 
 - Language: TypeScript on Node >= 22, ESM. The only runtime dependency is `smol-toml`. Tests use `node:test` with `tsx`.
-- Ecosystems: Python first, then JavaScript/TypeScript (v0.2).
+- Ecosystems: Python first, then JavaScript/TypeScript (v0.2), then Go. Rust waits until Go has been used on real pull requests.
 - Delivery: a JavaScript GitHub Action (`action.yml`, Node 24, bundled into `action-dist/`) and a CLI (`rsp check`), both thin wrappers around the same pure core.
 - Configuration: `.rsp.toml` (TOML, because `smol-toml` is already the one dependency), read from the base commit so a pull request cannot relax its own checks. Unknown keys, rules and pattern ids are errors. Each finding has a `key` that `allow` matches.
 - Test delta: rsp never runs tests itself in the core. `tests/delta` compares JUnit XML reports of base and head; the Action can run a `test-command` at both commits in git worktrees and rerun head to clear flaky failures. Flaky tests and cut-off reports are notes in the report (`tests`), not findings, because they describe the run, not the diff. `tests/uncovered-change` reads LCOV or Cobertura reports of the head run and runs only when one is given.
@@ -37,7 +37,7 @@ The name is **RSP: Reproducible Shortcut Patrol** (chosen 2026-10-21). The comma
 ## Code layout
 
 - `src/engine.ts`, `src/context.ts`, `src/git.ts`, `src/diff.ts`: the core, from two commits to a `DiffContext`, then to sorted findings.
-- `src/rules/`: one file per rule, each a pure function over `DiffContext`. Language helpers are in `python*.ts` and `js*.ts`.
+- `src/rules/`: one file per rule, each a pure function over `DiffContext`. Language helpers are in `python*.ts`, `js*.ts` and `go.ts`.
 - `src/report/`: JSON and Markdown output. `src/action.ts`: the GitHub Action (sticky PR comment, job summary, annotations).
 - `test/fixtures/<rule>/<case>/`: golden cases, each with `base/`, `head/` and a hand-written `expected.json`.
 - `eval/`: evaluation corpora and reports (see below).
@@ -49,7 +49,7 @@ The name is **RSP: Reproducible Shortcut Patrol** (chosen 2026-10-21). The comma
 Passing our own tests proves consistency, not that a rule works on real code. Every rule change goes through all four layers:
 
 1. **Golden fixtures.** Add a case per new behaviour (with JUnit reports in `reports/` when the rule reads test results), positive and negative, with expectations written by hand before running the rule. Every case runs every rule, so a rule that fires on another rule's fixture fails too.
-2. **Labelled mutations** (`npm run eval`). Risky and benign changes applied to the sample Python project (`eval/mutations.ts`) and the sample TypeScript service (`eval/mutations-js.ts`); the results file is committed and CI fails if it changes. Corpora built on real applications whose code must not be copied into this public repository live outside it and run with `RSP_EVAL_EXTRA=<file>[:<file>...]`; never commit their mutations, results or names. `tests/delta` and `tests/uncovered-change` are covered by fixtures and Action tests instead, because they need test runs.
+2. **Labelled mutations** (`npm run eval`). Risky and benign changes applied to the sample Python project (`eval/mutations.ts`), the sample TypeScript service (`eval/mutations-js.ts`) and the sample Go service (`eval/mutations-go.ts`); the results file is committed and CI fails if it changes. Corpora built on real applications whose code must not be copied into this public repository live outside it and run with `RSP_EVAL_EXTRA=<file>[:<file>...]`; never commit their mutations, results or names. `tests/delta` and `tests/uncovered-change` are covered by fixtures and Action tests instead, because they need test runs.
 3. **Real history** (`eval/real-history.ts`). Run the rules on about 100 recent commits of several public projects and check each finding against git independently of the rules. Every false fact found there gets fixed and becomes a golden fixture. This layer is where all false facts so far were found: aliased `TYPE_CHECKING`, optional imports, CI matrix keys, imports inside template literals, helper files in test folders, eslint replaced by oxlint, pnpm lockfiles written as several YAML documents, Yarn Berry keys quoted as a whole, `@t.overload` not recognized as an overload.
 4. **Action tests** against a fake GitHub API, including a run from the committed bundle, and the `e2e` CI job that runs the Action from `action.yml` on RSP's own pull requests.
 
@@ -61,6 +61,6 @@ After changing `src/`, run `npm run bundle` and commit `action-dist/`, because C
 
 - Per-rule blocking: `fail-on` per rule or per key in `.rsp.toml`, instead of only `never` and `any`.
 - Interface changes in Python class attributes, and routes built at run time.
-- More ecosystems (Go, Rust), each with its own manifests and suppressions.
+- Rust, with its own manifests and suppressions; the interface rules for Go.
 - Test delta without JUnit: read pytest and Vitest JSON reports directly.
 - Run `tests/delta` in the SWE-bench evaluation, using the task's test commands in the official Docker images.

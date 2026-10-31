@@ -15,6 +15,7 @@ import {
   uvLock,
   yarnLock,
 } from "./lockfiles.js";
+import { goSumEntries, parseGoMod } from "./go.js";
 import { normalizeDist } from "./python.js";
 import { codeSpan } from "../text.js";
 
@@ -27,10 +28,10 @@ const LOCAL_RANGE = /^(workspace:|file:|link:|portal:|patch:|git|github:|https?:
 export const depsLockfile: Rule = {
   id: "deps/lockfile",
   version: "0.1.0",
-  keys: "the package name, e.g. `zod` or `httpx`",
+  keys: "the package name or Go module path, e.g. `zod` or `httpx`",
   description:
-    "Dependencies added, changed or removed in package.json, pyproject.toml or Pipfile by the diff that the lockfile " +
-    "next to them (package-lock.json, pnpm-lock.yaml, yarn.lock, uv.lock, poetry.lock, pdm.lock, Pipfile.lock) does not match. " +
+    "Dependencies added, changed or removed in package.json, pyproject.toml, Pipfile or go.mod by the diff that the lockfile " +
+    "next to them (package-lock.json, pnpm-lock.yaml, yarn.lock, uv.lock, poetry.lock, pdm.lock, Pipfile.lock, go.sum) does not match. " +
     "Only lockfiles that existed at base and that rsp can read.",
   run(ctx) {
     const findings: RawFinding[] = [];
@@ -40,6 +41,7 @@ export const depsLockfile: Rule = {
       if (name === "package.json") findings.push(...javascript(ctx, file));
       else if (name === "pyproject.toml") findings.push(...pyproject(ctx, file));
       else if (name === "Pipfile") findings.push(...pipfile(ctx, file));
+      else if (name === "go.mod") findings.push(...goMod(ctx, file));
     }
     return findings;
   },
@@ -207,6 +209,35 @@ function pipfile(ctx: DiffContext, file: FileChange): RawFinding[] {
   if (!before || !after || ctx.readBase(lockPath) === undefined || ctx.readHead(lockPath) === undefined) return [];
   const view = pipfileLock(ctx.readHead(lockPath)!);
   return view ? compareNames(file, lockPath, "Pipfile.lock", before, after, view, /[A-Za-z0-9][A-Za-z0-9._-]*/g) : [];
+}
+
+/**
+ * go.mod: modules required by an added `require` line, at a version go.sum
+ * has no line for. Modules replaced by a local directory have no checksum.
+ * go.sum keeps lines of modules no longer required, so removals are not compared.
+ */
+function goMod(ctx: DiffContext, file: FileChange): RawFinding[] {
+  const before = parseGoMod(ctx.readBase(file.oldPath) ?? "", file.oldPath);
+  const after = parseGoMod(ctx.readHead(file.path) ?? "", file.path);
+  const sumPath = `${dirOf(file.path)}go.sum`;
+  const sumText = ctx.readHead(sumPath);
+  if (!before || !after || sumText === undefined || ctx.readBase(sumPath) === undefined) return [];
+  const sums = goSumEntries(sumText);
+  const added = new Set(file.lines.filter((l) => l.kind === "add").map((l) => l.newLine));
+  const lines = (ctx.readHead(file.path) ?? "").split("\n");
+  const findings: RawFinding[] = [];
+  for (const [path, version] of after.require) {
+    const line = after.lines.get(path)!;
+    if (before.require.get(path) === version || !added.has(line)) continue;
+    if (after.replace.has(path) || sums.has(`${path} ${version}`)) continue;
+    findings.push({
+      key: path,
+      message: `Requires ${codeSpan(path)} ${codeSpan(version)} in go.mod; go.sum has no line for it`,
+      locations: [{ path: file.path, line }, { path: sumPath }],
+      evidence: lines[line - 1]!.trim(),
+    });
+  }
+  return findings;
 }
 
 /** Python manifests: names added that the lockfile lacks, and, when it mirrors the project, names removed that it keeps. */

@@ -114,6 +114,11 @@ function verifyLockfile(dir: string, base: string, head: string, f: Finding): st
   if (manifest.line ? lines[manifest.line - 1] !== f.evidence : !lines.includes(f.evidence)) return "WRONG LINE";
   const unchanged = execFileSync("git", ["-C", dir, "diff", "--name-only", base, head, "--", lock.path], { encoding: "utf8" }).trim() === "";
   const name = /`([^`]+)`/.exec(f.message)![1]!;
+  if (f.message.startsWith("Requires")) {
+    const version = [...f.message.matchAll(/`([^`]+)`/g)][1]![1]!;
+    const listed = show(head, lock.path).split("\n").some((l) => l.startsWith(`${name} ${version} `) || l.startsWith(`${name} ${version}/go.mod `));
+    return listed ? "VERSION IN GO.SUM" : "version not in go.sum";
+  }
   const mentioned = new RegExp(`["'/\\s]${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'@:\\s]`, "i").test(show(head, lock.path));
   if (f.message.startsWith("Removes")) return mentioned ? "name still in lockfile" : "NAME NOT IN LOCKFILE";
   if (unchanged) return "lockfile unchanged";

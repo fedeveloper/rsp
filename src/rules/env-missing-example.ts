@@ -1,4 +1,5 @@
 import type { RawFinding, Rule } from "../types.js";
+import * as go from "./go.js";
 import * as js from "./js.js";
 import * as python from "./python.js";
 import { codeSpan } from "../text.js";
@@ -12,15 +13,16 @@ const STANDARD = new Set([
   "NODE_DEBUG", "NODE_ENV", "NODE_EXTRA_CA_CERTS", "NODE_OPTIONS", "NODE_TLS_REJECT_UNAUTHORIZED",
   "PATH", "PWD", "PYTHONHASHSEED", "PYTHONPATH", "SHELL", "TEMP", "TERM", "TMP", "TMPDIR", "TZ",
   "USER", "VIRTUAL_ENV",
+  "CGO_ENABLED", "GOARCH", "GOCACHE", "GODEBUG", "GOFLAGS", "GOMAXPROCS", "GOMEMLIMIT", "GOOS", "GOPATH", "GOPROXY", "GOROOT",
 ]);
 const STANDARD_PREFIXES = ["GITHUB_", "RUNNER_", "LC_", "npm_"];
 
 export const envMissingExample: Rule = {
   id: "env/missing-example",
-  version: "0.2.0",
+  version: "0.3.0",
   keys: "the variable name, e.g. `AWS_REGION`",
   description:
-    "Environment variables read in added Python or JavaScript/TypeScript code but missing from the example env file.",
+    "Environment variables read in added Python, JavaScript/TypeScript or Go code but missing from the example env file.",
   run(ctx) {
     const sources = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && envReader(f.path));
     if (sources.length === 0) return [];
@@ -48,7 +50,8 @@ export const envMissingExample: Rule = {
     for (const file of sources) {
       const read = envReader(file.path)!;
       // Code embedded in a JavaScript template literal is not read by this file.
-      const nonCode = js.JS_FILE.test(file.path) ? js.nonCodeLines(ctx.readHead(file.path) ?? "") : new Set<number>();
+      const text = ctx.readHead(file.path) ?? "";
+      const nonCode = js.JS_FILE.test(file.path) ? js.nonCodeLines(text) : go.GO_FILE.test(file.path) ? go.goNonCodeLines(text) : new Set<number>();
       for (const l of file.lines) {
         if (l.kind !== "add" || nonCode.has(l.newLine!)) continue;
         for (const name of new Set(read(l.text))) {
@@ -73,5 +76,6 @@ function isStandard(name: string): boolean {
 function envReader(path: string): ((line: string) => string[]) | undefined {
   if (path.endsWith(".py")) return python.envVarReads;
   if (js.JS_FILE.test(path)) return js.envVarReads;
+  if (go.GO_FILE.test(path)) return go.goEnvReads;
   return undefined;
 }

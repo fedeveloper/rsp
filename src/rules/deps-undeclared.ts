@@ -1,5 +1,6 @@
 import type { DiffContext, RawFinding, Rule } from "../types.js";
 import { isInTryBlock, importedSpecifiers, JS_FILE, nonCodeLines, packageName } from "./js.js";
+import { GO_FILE, goImports, goModules, isGoStdlib, moduleFor } from "./go.js";
 import { NODE_BUILTINS } from "./js-builtins.js";
 import { jsManifests } from "./js-manifests.js";
 import { importedModules, normalizeDist, optionalModules, stringLines } from "./python.js";
@@ -43,11 +44,12 @@ const KNOWN_DISTRIBUTIONS: Record<string, string[]> = {
 export const depsUndeclared: Rule = {
   id: "deps/undeclared",
   version: "0.4.0",
-  keys: "the imported module (Python) or package (JavaScript), e.g. `boto3`",
+  keys: "the imported module (Python), package (JavaScript) or import path (Go), e.g. `boto3`",
   description:
-    "Python and JavaScript/TypeScript imports added in the diff whose package is not declared in a dependency manifest.",
+    "Python, JavaScript/TypeScript and Go imports added in the diff whose package or module is not declared in a " +
+    "dependency manifest (go.mod for Go).",
   run(ctx) {
-    return [...python(ctx), ...javascript(ctx)];
+    return [...python(ctx), ...javascript(ctx), ...go(ctx)];
   },
 };
 
@@ -128,6 +130,42 @@ function javascript(ctx: DiffContext): RawFinding[] {
           evidence: l.text.trim(),
         });
       }
+    }
+  }
+  return findings;
+}
+
+/**
+ * Go import paths added in the diff that are neither in the standard library,
+ * nor in a module of the repository, nor under a module the nearest go.mod
+ * requires or replaces.
+ */
+function go(ctx: DiffContext): RawFinding[] {
+  const goFiles = ctx.files.filter((f) => !f.binary && f.status !== "deleted" && GO_FILE.test(f.path));
+  if (goFiles.length === 0) return [];
+  const mods = goModules(ctx);
+  // Every module of the repository, so a workspace or nested module is local.
+  const own = mods.map((m) => m.module);
+  const under = (path: string, mod: string) => path === mod || path.startsWith(`${mod}/`);
+  const findings: RawFinding[] = [];
+  for (const file of goFiles) {
+    // vendor/ and testdata/ hold copies and inputs, not the module's code.
+    if (/(^|\/)(vendor|testdata)\//.test(file.path)) continue;
+    const mod = moduleFor(mods, file.path);
+    if (!mod) continue;
+    const added = new Set(file.lines.filter((l) => l.kind === "add").map((l) => l.newLine));
+    const text = ctx.readHead(file.path) ?? "";
+    const lines = text.split("\n");
+    for (const imp of goImports(text)) {
+      if (!added.has(imp.line) || isGoStdlib(imp.path)) continue;
+      if (own.some((m) => under(imp.path, m))) continue;
+      if ([...mod.require.keys(), ...mod.replace.keys()].some((r) => under(imp.path, r))) continue;
+      findings.push({
+        key: imp.path,
+        message: `Imports ${codeSpan(imp.path)}, not required in ${mod.path}`,
+        locations: [{ path: file.path, line: imp.line }],
+        evidence: lines[imp.line - 1]!.trim(),
+      });
     }
   }
   return findings;
