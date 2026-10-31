@@ -6,30 +6,47 @@ The section of a version is the body of its GitHub Release.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-31
+
+Go joins Python and JavaScript/TypeScript, two rules read interfaces that other files still use, and the test delta tells flaky tests and coverage of the added lines apart. Rules whose version changed can report different findings on the same commits.
+
+| Rule | 0.4.0 | 0.5.0 |
+| --- | --- | --- |
+| `checks/disabled` | 0.3.0 | 0.4.0 |
+| `deps/undeclared` | 0.3.0 | 0.4.0 |
+| `deps/lockfile` | | 0.1.0 (new) |
+| `env/missing-example` | 0.2.0 | 0.3.0 |
+| `interface/untested-change` | 0.1.0 | 0.2.0 |
+| `interface/removed-still-used` | | 0.1.0 (new) |
+| `interface/route-removed` | | 0.1.0 (new) |
+| `tests/delta` | 0.1.0 | 0.2.0 |
+| `tests/uncovered-change` | | 0.1.0 (new) |
+
 ### Added
 
 - New rule `deps/lockfile` 0.1.0: dependencies added, changed or removed in `package.json`, `pyproject.toml` or `Pipfile` that the lockfile next to them does not match (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`).
-- `deps/undeclared` 0.4.0 reads more Python manifests: files included from requirements files with `-r` or `-c` whatever their name, `Pipfile`, and conda `environment.yml`. More manifests can only remove findings.
-- The sample Python project in the evaluation has a `uv.lock`; both sample projects have lockfile mutations.
 - New rule `interface/removed-still-used` 0.1.0: top-level Python names and JavaScript/TypeScript exports that the diff removes while another file still imports them.
 - New rule `interface/route-removed` 0.1.0: HTTP routes with a literal path (Flask, FastAPI, Django, Express, Fastify and similar routers) removed or given another method, and declared by no file at head.
-- `interface/untested-change` 0.2.0 also compares the constructors of dataclasses, attrs classes and Pydantic models, constructors and public methods of exported TypeScript classes, fields of exported TypeScript interfaces and object types (removed, added as required, made required), and return annotations. Keys can now be type names.
-
+- New rule `tests/uncovered-change` 0.1.0: added lines that the coverage report of the tests at head (LCOV or Cobertura) measures and that did not run, one fact per file. It runs only with `--coverage` or the Action's `coverage` input.
 - Go:
   - `deps/undeclared`: import paths added in `.go` files checked against the `require` and `replace` directives of the nearest `go.mod`, with the standard library, the repository's own modules, `vendor/` and `testdata/` left out.
   - `deps/lockfile`: modules required by an added `go.mod` line at a version `go.sum` has no line for.
-  - `checks/disabled` 0.4.0: `//nolint`, `//lint:ignore`, `#nosec`, `t.Skip` in `_test.go` files, deleted `_test.go` files, and `go test`, `go vet`, `golangci-lint`, `staticcheck`, `gofmt`, `gosec` and `govulncheck` as CI checks. Go tests are not counted for fewer assertions.
-  - `env/missing-example` 0.3.0: `os.Getenv`, `os.LookupEnv` and `syscall.Getenv`.
+  - `checks/disabled`: `//nolint`, `//lint:ignore`, `#nosec`, `t.Skip` in `_test.go` files, deleted `_test.go` files, and `go test`, `go vet`, `golangci-lint`, `staticcheck`, `gofmt`, `gosec` and `govulncheck` as CI checks. Go tests are not counted for fewer assertions.
+  - `env/missing-example`: `os.Getenv`, `os.LookupEnv` and `syscall.Getenv`.
   - A sample Go service in the evaluation, `eval/project-go/`, with its own labelled mutations, and real history on five Go projects (`eval/REAL_HISTORY_GO.md`).
-- New rule `tests/uncovered-change` 0.1.0: added lines that the coverage report of the tests at head (LCOV or Cobertura) measures and that did not run, one fact per file. It runs only with `--coverage` or the Action's `coverage` input.
-- `tests/delta` 0.2.0: tests that failed and also passed at head, on a rerun or through the runner's own retries (pytest-rerunfailures, Maven Surefire), are listed in the report under `tests.flaky` and below the table, not as findings. A head report cut off while it was written is listed under `tests.incomplete`, and missing tests are then not reported. JUnit reports with a byte order mark are read.
-
 - `CHANGELOG.md`, and a test that keeps it in step with the version in `package.json`.
 - Release workflow: pushing a tag `vX.Y.Z` on `main` creates the GitHub Release from this file and moves the major tag `v0` to the same commit.
 - End-to-end tests of the Action on this repository's own pull requests: the Action run from `action.yml`, its report compared with the CLI, and the environment of `test-command` checked on a real runner.
 - `docs/WRITING-RULES.md`, a guide for writing a new rule, with an example rule that a test runs.
 - Golden fixtures can carry JUnit reports in `reports/`, so `tests/delta` is tested like the other rules.
-- A sample JavaScript project in the evaluation, `eval/project-js/`, with its own labelled mutations.
+- A sample JavaScript project in the evaluation, `eval/project-js/`, with its own labelled mutations. The sample Python project has a `uv.lock`, and the sample projects have lockfile mutations.
+
+### Changed
+
+- `deps/undeclared` 0.4.0 reads more Python manifests: files included from requirements files with `-r` or `-c` whatever their name, `Pipfile`, and conda `environment.yml`. More manifests can only remove findings. It also reads Go (see Added).
+- `interface/untested-change` 0.2.0 also compares the constructors of dataclasses, attrs classes and Pydantic models, constructors and public methods of exported TypeScript classes, fields of exported TypeScript interfaces and object types (removed, added as required, made required), and return annotations. Keys can now be type names.
+- `tests/delta` 0.2.0: tests that failed and also passed at head, on a rerun or through the runner's own retries (pytest-rerunfailures, Maven Surefire), are listed in the report under `tests.flaky` and below the table, not as findings. A head report cut off while it was written is listed under `tests.incomplete`, and missing tests are then not reported. JUnit reports with a byte order mark are read.
+- `checks/disabled` 0.4.0 and `env/missing-example` 0.3.0 read Go (see Added).
 
 ## [0.4.0] - 2026-10-21
 
@@ -100,7 +117,8 @@ False facts found on real history and on SWE-bench patches:
 
 - YAML keys and flow mappings in workflows, such as matrix entries naming tox environments, are no longer read as CI commands.
 
-[Unreleased]: https://github.com/fedeveloper/rsp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/fedeveloper/rsp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/fedeveloper/rsp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/fedeveloper/rsp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fedeveloper/rsp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fedeveloper/rsp/compare/v0.1.0...v0.2.0

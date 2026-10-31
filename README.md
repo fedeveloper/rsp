@@ -3,7 +3,7 @@
 RSP is a rule-based verifier for code changes. It reads the diff of a pull request, runs a fixed set of bounded checks and reports only reproducible facts: which rule fired, in which file and on which line, on what evidence, and the exact command that produces the same finding again.
 
 ```markdown
-### RSP · 3 facts on 3f1c2a9b7d10..9e8d7c6b5a40 (rsp 0.4.0)
+### RSP · 3 facts on 3f1c2a9b7d10..9e8d7c6b5a40 (rsp 0.5.0)
 
 | Rule | Where | Fact | Evidence |
 | --- | --- | --- | --- |
@@ -77,17 +77,17 @@ jobs:
         with:
           fetch-depth: 0 # RSP needs the base commit too
           persist-credentials: false
-      - uses: fedeveloper/rsp@v0.4.0
+      - uses: fedeveloper/rsp@v0.5.0
 ```
 
-For production use, pin the action to the full commit SHA of a release instead of the tag (`uses: fedeveloper/rsp@<sha> # v0.4.0`), and let Dependabot update it; see [Security](#security). To follow every 0.x release without Dependabot, use the major tag `fedeveloper/rsp@v0`, which moves to each new release; [CHANGELOG.md](CHANGELOG.md) lists what changed in each.
+For production use, pin the action to the full commit SHA of a release instead of the tag (`uses: fedeveloper/rsp@<sha> # v0.5.0`), and let Dependabot update it; see [Security](#security). To follow every 0.x release without Dependabot, use the major tag `fedeveloper/rsp@v0`, which moves to each new release; [CHANGELOG.md](CHANGELOG.md) lists what changed in each.
 
 On every pull request RSP keeps one comment up to date with its findings, writes the same report to the job summary, adds annotations to the diff and sets two outputs: `findings` (the count) and `report` (the path of the JSON report). When a later push removes every finding, the comment says so instead of disappearing.
 
 To try it locally first:
 
 ```sh
-npm install -g github:fedeveloper/rsp#v0.4.0
+npm install -g github:fedeveloper/rsp#v0.5.0
 cd your-repo
 rsp check --base origin/main
 ```
@@ -286,7 +286,7 @@ Give the Action the command that installs dependencies and runs the tests:
 - uses: actions/setup-python@v6
   with:
     python-version: "3.12"
-- uses: fedeveloper/rsp@v0.4.0
+- uses: fedeveloper/rsp@v0.5.0
   with:
     test-command: pip install -e '.[test]' && pytest --junitxml=junit.xml
 ```
@@ -322,7 +322,7 @@ The `tests/uncovered-change` rule reads a line coverage report of the tests at h
 In the Action, set `coverage` to a glob of the report the test command writes; it is collected from the first run at head:
 
 ```yaml
-- uses: fedeveloper/rsp@v0.4.0
+- uses: fedeveloper/rsp@v0.5.0
   with:
     test-command: pip install -e '.[test]' && pytest --junitxml=junit.xml --cov --cov-report=xml
     coverage: coverage.xml
@@ -345,7 +345,7 @@ Turn each accepted pattern into `.rsp.toml` (`allow`, `exclude` or `enabled = fa
 When the remaining findings are ones you want to stop at, set `fail-on: any`:
 
 ```yaml
-- uses: fedeveloper/rsp@v0.4.0
+- uses: fedeveloper/rsp@v0.5.0
   with:
     fail-on: any
 ```
@@ -380,7 +380,7 @@ On pull requests from forks the `github.token` is read-only, so the comment is s
 The CLI is self-contained. In any CI with git and Node 22:
 
 ```sh
-npx --yes github:fedeveloper/rsp#v0.4.0 check --base "$TARGET_BRANCH" --format json > rsp.json
+npx --yes github:fedeveloper/rsp#v0.5.0 check --base "$TARGET_BRANCH" --format json > rsp.json
 ```
 
 and turn `rsp.json` into whatever your CI shows. With `--format markdown` (the default) the output can be posted as a merge request comment as is.
@@ -402,13 +402,13 @@ The Markdown report is the comment shown above. The JSON report, from `--format 
       "message": "Added pytest skip marker",
       "reproduce": "rsp check --base 0d21a94... --head 1d2dc83... --rule checks/disabled",
       "ruleId": "checks/disabled",
-      "ruleVersion": "0.3.0"
+      "ruleVersion": "0.4.0"
     }
   ],
   "head": "1d2dc83171117d1cd416497dbf8f687b2dd6b1f6",
   "options": [],
   "rules": [{ "id": "checks/disabled", "version": "0.4.0" }],
-  "tool": { "name": "rsp", "version": "0.4.0" }
+  "tool": { "name": "rsp", "version": "0.5.0" }
 }
 ```
 
