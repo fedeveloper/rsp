@@ -1,66 +1,88 @@
-# RSP: Reproducible Shortcut Patrol
+<div align="center">
 
-RSP is a rule-based verifier for code changes. It reads the diff of a pull request, runs a fixed set of bounded checks and reports only reproducible facts: which rule fired, in which file and on which line, on what evidence, and the exact command that produces the same finding again.
+<img src="docs/assets/banner.svg" alt="RSP: Reproducible Shortcut Patrol" width="100%">
 
-```markdown
-### RSP · 3 facts on 3f1c2a9b7d10..9e8d7c6b5a40 (rsp 0.5.0)
+<h3>Catch the shortcuts in a pull request. Report only facts anyone can reproduce.</h3>
 
-| Rule | Where | Fact | Evidence |
-| --- | --- | --- | --- |
-| checks/disabled | `tests/test_auth.py:6` | Added pytest skip marker | `@pytest.mark.skip(reason="flaky")` |
-| deps/undeclared | `app/client.py:3` | Imports `httpx`, not declared in pyproject.toml | `import httpx` |
-| tests/delta | `junit.xml` | Test `tests.test_auth::test_login` fails at head and passed at base | `tests.test_auth::test_login: passed -> failed` |
+[![Release](https://img.shields.io/github/v/release/fedeveloper/rsp?sort=semver&label=release&color=1f6feb)](https://github.com/fedeveloper/rsp/releases)
+[![CI](https://github.com/fedeveloper/rsp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/fedeveloper/rsp/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/fedeveloper/rsp/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/fedeveloper/rsp/actions/workflows/codeql.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Reproduce: `rsp check --base 3f1c2a9b7d10... --head 9e8d7c6b5a40...`
-```
+[![GitHub Action](https://img.shields.io/badge/GitHub_Action-node24-2088FF?logo=githubactions&logoColor=white)](action.yml)
+[![CLI](https://img.shields.io/badge/CLI-rsp-555?logo=gnubash&logoColor=white)](#command-line)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=nodedotjs&logoColor=white)](package.json)
+[![TypeScript](https://img.shields.io/badge/written_in-TypeScript-3178C6?logo=typescript&logoColor=white)](src)
+[![Runtime dependencies](https://img.shields.io/badge/runtime_deps-1-brightgreen)](package.json)
 
-It does not review code with a model, it does not score changes and it never says whether a change is correct. It points at a small number of specific, checkable things that plausible-looking changes tend to get wrong, and leaves the judgement to the people reviewing.
+[![Python](https://img.shields.io/badge/Python-supported-3776AB?logo=python&logoColor=white)](docs/RULES.md)
+[![JavaScript](https://img.shields.io/badge/JavaScript-supported-F7DF1E?logo=javascript&logoColor=black)](docs/RULES.md)
+[![TypeScript code](https://img.shields.io/badge/TypeScript-supported-3178C6?logo=typescript&logoColor=white)](docs/RULES.md)
+[![Go](https://img.shields.io/badge/Go-supported-00ADD8?logo=go&logoColor=white)](docs/RULES.md)
+[![GitHub Actions workflows](https://img.shields.io/badge/CI_workflows-supported-2088FF?logo=githubactions&logoColor=white)](docs/RULES.md#checksdisabled)
 
-- [Why RSP exists](#why-rsp-exists)
-- [Principles](#principles)
-- [Quick start](#quick-start)
-- [What RSP reports](#what-rsp-reports)
-- [Configuration: `.rsp.toml`](#configuration-rsptoml)
-- [Test results before and after](#test-results-before-and-after)
-- [Integrating RSP into your workflow](#integrating-rsp-into-your-workflow)
-- [Output](#output)
-- [GitHub Action reference](#github-action-reference)
-- [Command line reference](#command-line-reference)
-- [How RSP is validated](#how-rsp-is-validated)
-- [Security](#security)
-- [Limitations](#limitations)
-- [FAQ](#faq)
-- [Development](#development)
+**[Quick start](#quick-start)** · **[What it reports](#what-rsp-reports)** · **[Rules](docs/RULES.md)** · **[User guide](docs/GUIDE.md)** · **[Changelog](CHANGELOG.md)**
 
-## Why RSP exists
+</div>
 
-Coding assistants and agents now write a large share of pull requests. Their changes usually look right: they compile, they read well, and the summary says the task is done. The failures that remain are the plausible-but-wrong kind, and many of them come from the same few shortcuts taken to make something "work":
+---
 
-- a failing test is skipped, marked as expected to fail, or deleted;
-- a type or lint error is silenced with `# type: ignore`, `@ts-ignore` or `eslint-disable` instead of fixed;
-- a CI step that was failing is removed, or allowed to fail with `|| true` or `continue-on-error`;
-- a new package is imported but never added to the dependency manifest, so it works only on the machine where it happened to be installed;
-- the code starts reading an environment variable that nobody documented in `.env.example`;
-- the parameters of a public function change and no test is updated to match;
-- tests that passed before the change fail, or quietly stop running, after it.
+**RSP** is a rule-based verifier for code changes. It reads the diff of a pull request, runs a fixed set of bounded checks and reports only **reproducible facts**: which rule fired, in which file and on which line, on what evidence, and the exact command that produces the same finding again.
 
-None of these needs a model to detect. Each is a mechanical property of the diff, and each is easy to miss when reading a large change that otherwise looks fine. RSP checks for exactly these, and nothing more, so that a reviewer can spend attention on what only a person can judge.
+It is built for the pull requests that coding assistants and agents open, which look finished and are sometimes wrong in quiet, plausible ways. It works just as well on changes written by people: the shortcuts are human ones first.
 
-The same checks are just as useful on changes written by people: the shortcuts are human ones first.
+RSP does not review code with a model, does not score changes and never says whether a change is correct. It points at a few specific, checkable things and leaves the judgement to the people who review.
 
-## Principles
+## What a report looks like
 
-These constrain every rule and every change to rsp.
+On every pull request, RSP keeps one comment up to date:
 
-- **Facts, not judgements.** A finding says what changed ("Added `@ts-ignore` comment", "Imports `httpx`, not declared in pyproject.toml"), never that it is bad or what to do. A skipped test can be the right call; RSP only makes sure it is a visible one.
-- **Precision before recall.** When a case is ambiguous, the rule stays silent. A false fact costs more trust than a missed one, so rules give up coverage to avoid reporting things that are not true.
-- **Diff-scoped.** Rules look only at lines added or changed by the pull request. Pre-existing debt is never reported, and lines moved from one file to another are not new.
-- **Reproducible.** The same two commits and the same RSP version give byte-identical output. Rules use no network and no clock. Findings are sorted and carry a fingerprint that does not depend on line numbers, and every finding carries the command that reproduces it.
-- **Advisory by default.** Whether a finding blocks a merge is your configuration. Out of the box RSP comments and never fails the build.
+> ### RSP · 3 facts on 3f1c2a9b7d10..9e8d7c6b5a40 (rsp 0.5.0)
+>
+> | Rule | Where | Fact | Evidence |
+> | --- | --- | --- | --- |
+> | checks/disabled | `tests/test_auth.py:6` | Added pytest skip marker | `@pytest.mark.skip(reason="flaky")` |
+> | deps/undeclared | `app/client.py:3` | Imports `httpx`, not declared in pyproject.toml | `import httpx` |
+> | tests/delta | `junit.xml` | Test `tests.test_auth::test_login` fails at head and passed at base | `tests.test_auth::test_login: passed -> failed` |
+>
+> Reproduce: `rsp check --base 3f1c2a9b7d10... --head 9e8d7c6b5a40...`
+
+Every line is a fact you can check in seconds. Run the reproduce command on the same commits and you get the same bytes.
+
+## Why RSP
+
+When a test, a type check or a CI step stands between a change and "done", the same few shortcuts appear again and again:
+
+| The shortcut | What RSP reports |
+| --- | --- |
+| A failing test is skipped, marked as expected to fail, or deleted | `checks/disabled` |
+| A type or lint error is silenced with `# type: ignore`, `@ts-ignore`, `eslint-disable` or `//nolint` | `checks/disabled` |
+| A failing CI step is removed, or allowed to fail with `\|\| true` or `continue-on-error` | `checks/disabled` |
+| A new package is imported but never added to the manifest | `deps/undeclared` |
+| A manifest is edited by hand and the lockfile no longer matches | `deps/lockfile` |
+| Code reads an environment variable that `.env.example` does not document | `env/missing-example` |
+| A function is renamed or removed while other files still import it | `interface/removed-still-used` |
+| An HTTP route disappears or changes method | `interface/route-removed` |
+| A public signature, type or return type changes and no test follows | `interface/untested-change` |
+| Tests that passed before the change fail, or quietly stop running, after it | `tests/delta` |
+| Added lines never run in the tests | `tests/uncovered-change` |
+
+None of these needs a model to detect. Each is a mechanical property of the diff, and each is easy to miss in a large change that otherwise looks fine.
+
+## Highlights
+
+- 🔎 **Facts, not judgements.** A finding says what changed ("Added `@ts-ignore` comment"), never that it is bad or what to do. A skipped test can be the right call; RSP makes sure it is a visible one.
+- 🎯 **Precision before recall.** When a case is ambiguous, the rule stays silent. A false fact costs more trust than a missed one.
+- ✂️ **Diff-scoped.** Only added or changed lines count. Pre-existing debt is never reported, and lines moved between files are not new.
+- 🔁 **Reproducible.** Same commits and same version give byte-identical output. Rules use no network and no clock. Every finding carries a stable fingerprint and its reproduce command.
+- 🤝 **Advisory by default.** RSP comments and never fails the build until you set `fail-on: any`.
+- 🔒 **Hardened.** Least-privilege permissions, diff text rendered inert, pull request code executed only when you ask for a test run, and a single runtime dependency.
 
 ## Quick start
 
-Add a workflow to the repository, for example `.github/workflows/rsp.yml`:
+### GitHub Action
+
+Add `.github/workflows/rsp.yml` to your repository:
 
 ```yaml
 name: RSP
@@ -77,14 +99,24 @@ jobs:
         with:
           fetch-depth: 0 # RSP needs the base commit too
           persist-credentials: false
-      - uses: fedeveloper/rsp@v0.5.0
+      - uses: fedeveloper/rsp@v0
 ```
 
-For production use, pin the action to the full commit SHA of a release instead of the tag (`uses: fedeveloper/rsp@<sha> # v0.5.0`), and let Dependabot update it; see [Security](#security). To follow every 0.x release without Dependabot, use the major tag `fedeveloper/rsp@v0`, which moves to each new release; [CHANGELOG.md](CHANGELOG.md) lists what changed in each.
+That's all. On each pull request RSP:
 
-On every pull request RSP keeps one comment up to date with its findings, writes the same report to the job summary, adds annotations to the diff and sets two outputs: `findings` (the count) and `report` (the path of the JSON report). When a later push removes every finding, the comment says so instead of disappearing.
+1. keeps one comment up to date with its findings, and says so when a later push removes them all;
+2. writes the same report to the job summary;
+3. adds annotations to the changed lines;
+4. sets the outputs `findings` (the count) and `report` (the path of the JSON report).
 
-To try it locally first:
+> [!TIP]
+> `@v0` is the major tag: it moves to every new 0.x release, and [CHANGELOG.md](CHANGELOG.md) lists what changed in each. For production, pin the full commit SHA of a release instead (`uses: fedeveloper/rsp@<sha> # v0.5.0`) and let Dependabot update it.
+
+RSP is distributed from this repository. It is not listed on the GitHub Marketplace.
+
+### Command line
+
+Requirements: Node 22 or later, and git.
 
 ```sh
 npm install -g github:fedeveloper/rsp#v0.5.0
@@ -92,469 +124,250 @@ cd your-repo
 rsp check --base origin/main
 ```
 
-RSP needs Node 22 or later and git. It supports Python, JavaScript/TypeScript (Node and front-end code) and Go; the CI checks work for any GitHub Actions workflow.
+Useful variants:
+
+```sh
+rsp check --base origin/main --format json   # machine-readable, ideal for agents
+rsp check --base origin/main --no-config     # ignore .rsp.toml and see everything
+rsp --list-rules                             # rules, versions and finding keys
+```
+
+In any CI that has git and Node 22, without installing anything first:
+
+```sh
+npx --yes github:fedeveloper/rsp#v0.5.0 check --base "$TARGET_BRANCH" --format json > rsp.json
+```
+
+Findings never change the exit code: `0` means RSP ran, `2` means a usage or configuration error.
 
 ## What RSP reports
 
-There are nine rules. Each looks at the diff between the merge-base of the pull request and its head, and each finding has a **key**, which is what you name in `.rsp.toml` to accept that kind of finding (see [Configuration](#configuration-rsptoml)). `rsp --list-rules` prints the same information.
+Nine rules, each a pure function of the diff. Every finding has a **key** (a pattern id, a package, a variable, a function name or a test id) that you can accept in `.rsp.toml`.
 
-### `checks/disabled`
+| Rule | Reports | Python | JS / TS | Go |
+| --- | --- | :---: | :---: | :---: |
+| [`checks/disabled`](docs/RULES.md#checksdisabled) | Skipped or focused tests, suppressions, deleted test files, fewer assertions, weakened CI, lower coverage thresholds, strictness turned off | ✅ | ✅ | ✅ |
+| [`deps/undeclared`](docs/RULES.md#depsundeclared) | Imports of packages that no manifest declares | ✅ | ✅ | ✅ |
+| [`deps/lockfile`](docs/RULES.md#depslockfile) | Manifest changes that the lockfile does not match | ✅ | ✅ | ✅ |
+| [`env/missing-example`](docs/RULES.md#envmissing-example) | Environment variables missing from `.env.example` | ✅ | ✅ | ✅ |
+| [`interface/removed-still-used`](docs/RULES.md#interfaceremoved-still-used) | Removed names that other files still import | ✅ | ✅ | |
+| [`interface/route-removed`](docs/RULES.md#interfaceroute-removed) | HTTP routes removed or given another method | ✅ | ✅ | |
+| [`interface/untested-change`](docs/RULES.md#interfaceuntested-change) | Changed public interfaces that no changed test mentions | ✅ | ✅ | |
+| [`tests/delta`](docs/RULES.md#testsdelta) | Tests that passed at base and fail, are skipped or are missing at head, from JUnit XML | any | any | any |
+| [`tests/uncovered-change`](docs/RULES.md#testsuncovered-change) | Added lines that did not run, from an LCOV or Cobertura report | any | any | any |
 
-Checks that were removed or switched off.
+The CI checks of `checks/disabled` read GitHub Actions workflows, whatever the language of the project. [docs/RULES.md](docs/RULES.md) describes each rule in full, with every key and every case where it stays silent on purpose.
 
-| What | Example | Key |
-| --- | --- | --- |
-| pytest skip and xfail markers | `@pytest.mark.skip(reason="flaky")` | `pytest-skip`, `pytest-xfail` |
-| `pytest.skip()` called inside a test | `pytest.skip("todo")` | `pytest-skip-call` |
-| unittest skips | `@unittest.skip`, `@unittest.skipIf`, `@unittest.expectedFailure` | `unittest-skip` |
-| JS/TS skipped or focused tests | `it.skip`, `test.skipIf`, `xit`, `describe.only` | `test-skip`, `test-only` |
-| Go tests skipped (in `_test.go` files) | `t.Skip("flaky")`, `t.SkipNow()` | `go-test-skip` |
-| Python suppressions | `# noqa`, `# type: ignore`, `# pylint: disable`, `# nosec` | `noqa`, `type-ignore`, `pylint-disable`, `nosec` |
-| Coverage exclusions | `# pragma: no cover`, `/* istanbul ignore next */`, `c8 ignore`, `v8 ignore` | `coverage-exclusion` |
-| JS/TS suppressions | `eslint-disable`, `@ts-ignore`, `@ts-nocheck`, `@ts-expect-error`, `biome-ignore` | `eslint-disable`, `ts-ignore`, `ts-nocheck`, `ts-expect-error`, `biome-ignore` |
-| Go suppressions | `//nolint`, `//lint:ignore`, `// #nosec` | `nolint`, `lint-ignore`, `nosec` |
-| Test files deleted | `tests/test_store.py` removed | `test-file-deleted` |
-| Fewer assertions across the changed tests | 12 `assert` before, 9 after | `fewer-assertions` |
-| A CI line running a checker removed | `- run: mypy src` or `- run: golangci-lint run` deleted | `ci-check-removed` |
-| CI steps allowed to fail | `continue-on-error: true`, `pytest \|\| true`, `\|\| exit 0`, `if: false` | `continue-on-error`, `or-true`, `or-exit-0`, `if-false` |
-| pytest told to skip tests | `--deselect`, `--ignore` in `addopts` | `pytest-exclude-option` |
-| Lower coverage threshold | `fail_under = 85` → `60` | `coverage-threshold-lowered` |
-| A package.json script stops running a check | `"lint": "eslint ."` → `"lint": "true"` | `script-check-removed` |
-| TypeScript strictness turned off | `"strict": false` in tsconfig | `ts-strict-off` |
-| ESLint rules turned off | `"no-unused-vars": "off"` | `eslint-rule-off` |
+## Usage recipes
 
-It deliberately ignores lines moved between files, tests moved to another file, a checker replaced by one of the same kind (eslint by oxlint, jest by vitest, flake8 by ruff), `@ts-expect-error` inside test files (where it is the assertion), and helper files that live in test folders but contain no tests. Go test files are not counted for fewer assertions, because Go tests assert through `t.Error`, testify or helpers of their own.
+### Compare test results before and after
 
-### `deps/undeclared`
+Give the Action the command that installs dependencies and runs the tests with a JUnit report. RSP runs it at base and at head, each in its own git worktree, and reruns head once to clear flaky failures:
 
-Imports added by the diff whose package is not declared in a dependency manifest. The key is the imported module (Python), package (JavaScript) or import path (Go).
-
-- **Python** imports are checked against `pyproject.toml` (PEP 621 dependencies and optional dependencies, PEP 735 dependency groups, Poetry, PDM and uv), `requirements*.txt` and any file they include with `-r` or `-c`, `Pipfile`, conda `environment.yml`, `setup.cfg` and literal lists in `setup.py`. Import names are mapped to distribution names where they differ (`yaml` is `PyYAML`, `sklearn` is `scikit-learn`).
-- **JavaScript/TypeScript** `import`, `export ... from` and `require()` are checked against every `package.json` between the file and the repository root, including `@types/` packages.
-- **Go** import paths are checked against the `require` and `replace` directives of the nearest `go.mod`; a subpackage of a required module is covered by it.
-
-It ignores the standard library and Node built-ins, the repository's own modules, workspace packages and Go modules, `vendor/` and `testdata/`, relative imports, tsconfig path aliases, imports under `if TYPE_CHECKING:` or inside `try`/`except` (Python) or `try`/`catch` (JS), dynamic `import()`, code inside strings and template literals, and repositories with no manifest at all.
-
-### `deps/lockfile`
-
-Dependencies added, changed or removed in a manifest by the diff that the lockfile next to it does not match. This is what happens when a dependency is added to `package.json` or `pyproject.toml` by hand instead of through the package manager. The key is the package name.
-
-| Lockfile | Compared with the manifest |
-| --- | --- |
-| `package-lock.json`, `npm-shrinkwrap.json` (v2, v3) | the lockfile's copy of the package's dependency ranges (`packages[""]`, or the workspace's entry) |
-| `pnpm-lock.yaml` (v6, v9) | `importers` and their `specifier`s |
-| `yarn.lock` (classic and Berry) | an entry for `name@range` |
-| `uv.lock` | the project's `requires-dist` and `requires-dev` |
-| `poetry.lock`, `pdm.lock`, `Pipfile.lock` | the package is locked at all |
-| `go.sum` | a line for the required module at the required version |
-
-```text
-deps/lockfile  package.json:14  Declares `zod` `^3.23.0` in dependencies; package-lock.json does not list it
-deps/lockfile  package.json:9   Declares `express` `^5.1.0` in dependencies; package-lock.json records `^4.18.0`
-deps/lockfile  pyproject.toml   Removes `pydantic` from pyproject.toml; uv.lock still lists it
+```yaml
+- uses: actions/setup-python@v6
+  with:
+    python-version: "3.12"
+- uses: fedeveloper/rsp@v0
+  with:
+    test-command: pip install -e '.[test]' && pytest --junitxml=junit.xml
 ```
 
-The rule only looks at lockfiles that existed at base, in the manifest's directory or the nearest one above it, and that it can read. It stays silent for `package-lock.json` v1, for a directory with two kinds of lockfile, for local ranges (`workspace:`, `file:`, git URLs), for manifests that were only reformatted, and for removals from lockfiles that list every installed package rather than the project's own requirements (Yarn, Poetry, PDM, Pipfile).
+Already have reports from both commits? Pass them to the CLI:
 
-### `env/missing-example`
-
-Environment variables read by literal name in added code that are missing from the repository's example env file (`.env.example`, `.env.sample`, `.env.local.example`, `example.env`, ...). The key is the variable name.
-
-- **Python**: `os.getenv("X")`, `os.environ["X"]`, `os.environ.get("X")`.
-- **JavaScript/TypeScript**: `process.env.X`, `process.env["X"]`, destructuring from `process.env`, `import.meta.env.X`, `Deno.env.get("X")`, `Bun.env.X`.
-- **Go**: `os.Getenv("X")`, `os.LookupEnv("X")`, `syscall.Getenv("X")`.
-
-It ignores variables set by the OS, Node, Vite or CI (`HOME`, `NODE_ENV`, `import.meta.env.MODE`, `GITHUB_*` and similar), writes to the environment, reads moved from elsewhere in the repository, and repositories without an example file: no example file means there is no convention to keep up.
-
-### `interface/removed-still-used`
-
-Names that the diff removes from a module while another file still imports them by name at head: the rename or deletion whose callers were left behind. The key is the module and the name, such as `app/config.py:load_settings`.
-
-- **Python**: top-level functions, classes and assignments, imported with `from module import name` (relative imports and the `src/` layout included).
-- **JavaScript/TypeScript**: exports, including the default export, imported with `import { name }`, `import name` or re-exported with `export { name } from` through a relative path.
-
-```text
-interface/removed-still-used  app/views.py:3  Imports `load_settings` from `app/config.py`, which no longer defines it
+```sh
+rsp check --base origin/main --junit-base base/junit.xml --junit-head head/junit.xml
 ```
 
-It stays silent when the name is still mentioned anywhere in the module (it may be re-exported or assigned), for modules that can define names dynamically (`__getattr__`, `import *`, `globals()`, `export *`, CommonJS exports), for submodules of a package, for imports guarded by `try` or `TYPE_CHECKING`, and for imports that resolve to more than one file.
+### Check that added lines run in the tests
 
-### `interface/route-removed`
-
-HTTP routes declared with a literal path that the diff removes, or whose method it changes, and that no file declares at head. The key is the method and path, such as `GET /items/:id`.
-
-- **Python**: Flask and FastAPI decorators (`@app.route` with `methods`, `@router.get`, ...), Django `path()` and `re_path()` in `urls.py`.
-- **JavaScript/TypeScript**: `app.get("/x", ...)` and the other methods on receivers named like a server or router (`app`, `router`, `server`, `fastify`, `api`, `*Router`, ...), so client calls such as `axios.get("/x")` are not routes.
-
-```text
-interface/route-removed  src/server.ts  Removed route `DELETE /items/:sku`; no file declares it at head
+```yaml
+- uses: fedeveloper/rsp@v0
+  with:
+    test-command: pip install -e '.[test]' && pytest --junitxml=junit.xml --cov --cov-report=xml
+    coverage: coverage.xml
 ```
 
-Renaming a path parameter is not a change, and a route moved to another file or router is still served. Routes in tests, examples and docs are left out, and so are paths built at run time.
+### Make findings block a merge
 
-### `interface/untested-change`
-
-Public interfaces that changed while no test file changed by the diff mentions them. The key is the function or type name, such as `load_settings`, `Store.add` or `Settings`.
-
-- **Parameters**: a parameter added or removed, a new or changed default, a different order, or a rename where callers can pass the parameter by name. For Python this covers public top-level functions, methods of public classes, and the constructors that dataclasses, attrs classes and Pydantic models get from their fields; for JavaScript/TypeScript, exported functions, exported arrow functions, and constructors and public methods of exported classes.
-- **Fields of TypeScript types**: fields of exported interfaces and object type aliases removed, added as required, or made required. Adding an optional field is not reported.
-- **Return types**: a return annotation changed, after normalizing spellings that mean the same (`List[str]` and `list[str]`, `Optional[int]` and `int | None`, union order). Adding or removing an annotation is not a change.
-
-```text
-interface/untested-change  src/api.py:4       Return type of `load`: changed `dict` to `list`; no test changed by the diff mentions it
-interface/untested-change  src/config.ts:1    Fields of `Settings`: removed `port`; added required `timeout`; no test changed by the diff mentions it
+```yaml
+- uses: fedeveloper/rsp@v0
+  with:
+    fail-on: any
 ```
 
-It ignores changes to parameter annotations and formatting only, renames of JavaScript positional parameters (callers cannot see them), private names (`_helper`), typed overloads that add no new parameter list, return types of overloaded functions, fields removed from interfaces that extend another one, types with index signatures, functions and types that a changed test mentions, files that are themselves tests, and repositories with no tests at all.
+Then make the check required in branch protection. A good path is to start advisory, read the findings on real pull requests for a week or two, encode your conventions in `.rsp.toml`, and only then block.
 
-### `tests/delta`
+### Put RSP inside a coding agent's loop
 
-Differences between the test results at base and at head, read from JUnit XML reports. It runs only when reports are given; see [Test results before and after](#test-results-before-and-after). The key is the test id, `classname::name` as in the report, or `no-tests`.
+Ask the agent to run this command before it reports a task as done:
 
-- A test that passed at base and fails at head.
-- A test that ran at base and is skipped at head.
-- A test that ran at base and is missing at head, reported only when the head suite is smaller than the base one, so renamed and moved tests are not reported as missing.
-- No test results at all at head when there were some at base.
-
-Tests that already failed at base are not reported: they are not caused by the pull request. Tests that failed and also passed at head, on a rerun or through the runner's own retries (pytest-rerunfailures, Maven Surefire), count as passed and are listed under the table as flaky, not as findings. When a head report was cut off while it was written, missing tests are not reported, and the report says so.
-
-### `tests/uncovered-change`
-
-Added lines that the coverage report of the tests at head measures and that did not run, one fact per file. It runs only when coverage reports are given, so it is off unless you ask for it; see [Coverage of added lines](#coverage-of-added-lines). The key is the file path.
-
-```text
-tests/uncovered-change  src/billing.py:7  1 of the 4 added lines of `src/billing.py` that the coverage report measures did not run in the tests at head
+```sh
+rsp check --base origin/main --format json
 ```
 
-It reads LCOV and Cobertura XML. Lines the report does not measure, comments, TypeScript type-only declarations and lines moved from elsewhere in the diff are not counted, and files the report does not mention are not reported.
+The agent can then fix the change or explain each finding in the pull request description. For Claude Code this fits a project instruction in `CLAUDE.md` or a stop hook; other agents have equivalent hooks.
 
-## Configuration: `.rsp.toml`
+More recipes (monorepos, forks, other CI systems, pre-push hooks, runner-by-runner report commands) are in the [user guide](docs/GUIDE.md#integrating-rsp-into-your-workflow).
 
-RSP works without configuration. When a repository needs exceptions, it adds `.rsp.toml` at its root:
+## Configuration
+
+RSP works without configuration. When a repository needs exceptions, add `.rsp.toml` at its root:
 
 ```toml
 # Never look at these files, for any rule.
 exclude = ["vendor/**", "tests/fixtures/**"]
 
 [rules."checks/disabled"]
-# This codebase is typed and accepts targeted ignores.
-allow = ["type-ignore"]
-# Generated clients are full of suppressions.
-exclude = ["src/generated/**"]
+allow = ["type-ignore"]          # this codebase accepts targeted ignores
+exclude = ["src/generated/**"]   # generated clients are full of suppressions
 
 [rules."deps/undeclared"]
-# Provided by the runtime image, not by pyproject.toml.
-allow = ["boto3", "botocore"]
+allow = ["boto3", "botocore"]    # provided by the runtime image
 
 [rules."env/missing-example"]
 enabled = false
 ```
 
-| Key | Meaning |
-| --- | --- |
-| `exclude` | Globs of changed files hidden from every rule. |
-| `rules."<id>".enabled` | `false` turns the rule off. A rule named explicitly with `--rule` or the `rules` input still runs. |
-| `rules."<id>".allow` | Finding keys the rule does not report: pattern ids for `checks/disabled`, packages, variables, function names or test ids for the others. |
-| `rules."<id>".exclude` | Globs of files whose findings this rule does not report. |
+Two properties make the file safe to rely on:
 
-Two properties are worth knowing:
+- **It is read from the base commit, never from the head.** A pull request cannot relax its own checks; a new configuration applies from the next pull request after it is merged.
+- **Mistakes are errors.** An unknown key, rule or pattern id stops the run with the list of valid values, so a typo never silently turns a check off.
 
-- **The configuration is read from the base commit**, never from the head. A pull request cannot relax the checks it is held to by editing `.rsp.toml` in the same change; the new configuration applies from the next pull request after it is merged. The report says when a configuration was used ("Configuration: `.rsp.toml` from the base commit.").
-- **Mistakes are errors, not warnings.** An unknown key, an unknown rule or an unknown pattern id in `allow` stops the run with a message that lists the valid values, because a typo must not silently turn a check off. In the Action this fails the step with `rsp configuration is invalid: ...`.
-
-`--no-config` ignores the file, which is useful to see everything once.
-
-## Test results before and after
-
-The `tests/delta` rule compares the results of the test suite at the base commit and at the head commit. It reads standard JUnit XML, which almost every test runner can write:
-
-| Runner | How to write JUnit XML |
-| --- | --- |
-| pytest | `pytest --junitxml=junit.xml` |
-| unittest | `python -m xmlrunner` (unittest-xml-reporting) or run the tests through pytest |
-| Vitest | `vitest run --reporter=junit --outputFile=junit.xml` |
-| Jest | `jest --reporters=default --reporters=jest-junit` (writes `junit.xml`) |
-| Mocha | `mocha --reporter mocha-junit-reporter` |
-| node:test | `node --test --test-reporter=junit --test-reporter-destination=junit.xml` |
-| Go | `gotestsum --junitfile junit.xml` |
-
-### In the GitHub Action
-
-Give the Action the command that installs dependencies and runs the tests:
-
-```yaml
-- uses: actions/setup-python@v6
-  with:
-    python-version: "3.12"
-- uses: fedeveloper/rsp@v0.5.0
-  with:
-    test-command: pip install -e '.[test]' && pytest --junitxml=junit.xml
-```
-
-The test command runs the pull request's code, so RSP runs it with care: without the Action's inputs (which hold the GitHub token) or the runtime tokens of Actions in its environment, without the files through which a step changes later steps (`GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`), and with workflow commands switched off while it prints. It refuses to run on `pull_request_target`, and warns when the checkout left a token in `.git/config` (use `persist-credentials: false`). See [Security](#security).
-
-RSP then checks out the base and the head each in its own git worktree under the runner's temporary directory, runs the command in each (in collapsible log groups), collects the files matching `junit` (default `**/junit*.xml`) and compares them. The worktrees are removed afterwards. If tests fail at head that passed at base, the head run is repeated up to `test-retries` times (default 1) and a test that passes in any run counts as passing, so a flaky test does not become a finding. The exit code of the test command is logged but does not matter: a test suite with failures is exactly what the rule reads.
-
-Running the suite twice doubles the test time of the job. For a slow suite, put RSP in its own job so it runs in parallel with your normal CI.
-
-### From the command line, or with reports you already have
-
-If your CI already runs the tests on the base branch and on the pull request, pass the reports directly:
-
-```sh
-rsp check --base origin/main --junit-base base/junit.xml --junit-head head/junit.xml
-```
-
-Both options are repeatable for sharded suites; results from several files of the same commit are merged, and a test that passed in any of them counts as passed.
-
-## Coverage of added lines
-
-The `tests/uncovered-change` rule reads a line coverage report of the tests at head:
-
-| Runner | How to write the report |
-| --- | --- |
-| pytest | `pytest --cov --cov-report=xml` (pytest-cov, writes `coverage.xml`) |
-| coverage.py | `coverage xml` or `coverage lcov` |
-| Vitest | `vitest run --coverage --coverage.reporter=lcov` (writes `coverage/lcov.info`) |
-| Jest | `jest --coverage --coverageReporters=lcov` |
-| c8, nyc | `--reporter=lcov` |
-
-In the Action, set `coverage` to a glob of the report the test command writes; it is collected from the first run at head:
-
-```yaml
-- uses: fedeveloper/rsp@v0.5.0
-  with:
-    test-command: pip install -e '.[test]' && pytest --junitxml=junit.xml --cov --cov-report=xml
-    coverage: coverage.xml
-```
-
-From the command line, pass `--coverage <file>`, repeatable. Paths in the report are matched to the repository's files by their longest common ending, so absolute paths written on another machine still match.
-
-## Integrating RSP into your workflow
-
-### 1. Start advisory
-
-Add the [quick start](#quick-start) workflow and leave `fail-on` at `never`. For a week or two, read the comments on real pull requests. Every finding should be true; if you ever see one that is not, that is a bug in RSP and worth [an issue](https://github.com/fedeveloper/rsp/issues). What you will see instead are true findings that your team considers fine, such as `# type: ignore` in a typed codebase.
-
-### 2. Encode your conventions
-
-Turn each accepted pattern into `.rsp.toml` (`allow`, `exclude` or `enabled = false`) and merge it. Because the file is read from the base commit, it starts applying to the next pull request, and every later relaxation goes through review as a change of its own.
-
-### 3. Decide what blocks
-
-When the remaining findings are ones you want to stop at, set `fail-on: any`:
-
-```yaml
-- uses: fedeveloper/rsp@v0.5.0
-  with:
-    fail-on: any
-```
-
-and make the check required in branch protection. Findings that should stay informational can run in a second, non-blocking step with `rules:` limited to them, and be turned off in `.rsp.toml` for the blocking one.
-
-### Pull requests from coding agents
-
-RSP is designed for the pull requests that coding agents open: they are large, they look finished, and the shortcuts listed above are exactly the ones agents take when a test or a type check stands between them and "done".
-
-- **In CI.** The Action runs on agent pull requests like on any other. Many teams make it blocking only for them, for example with `if: github.actor == 'my-agent[bot]'` on a `fail-on: any` step.
-- **Inside the agent's loop.** Give the agent the command and ask it to run it before it reports the task as done: `rsp check --base origin/main --format json`. The JSON is easy for an agent to read, and because findings are facts rather than opinions, the agent can either fix the change or explain each finding in the pull request description. For Claude Code this fits a project instruction in `CLAUDE.md` or a hook on stop; other agents have equivalent hooks.
-- **Before a push.** As a git hook, `.git/hooks/pre-push`:
-
-  ```sh
-  #!/bin/sh
-  RSP check --base origin/main || exit 0
-  ```
-
-  This prints findings without blocking; the exit code of `rsp check` never depends on findings, only on usage errors.
-
-### Monorepos
-
-Run RSP once at the repository root. `deps/undeclared` resolves each JavaScript file against the nearest `package.json` files up to the root and knows workspace packages; Python files are checked against all Python manifests in the repository. Use `exclude` for generated or vendored directories.
-
-### Forks
-
-On pull requests from forks the `github.token` is read-only, so the comment is skipped with a warning; the job summary and annotations still carry the full report. A `test-command` runs code from the pull request, so treat it like any other step that runs the tests of a fork: use the `pull_request` event, never `pull_request_target`.
-
-### Other CI systems
-
-The CLI is self-contained. In any CI with git and Node 22:
-
-```sh
-npx --yes github:fedeveloper/rsp#v0.5.0 check --base "$TARGET_BRANCH" --format json > rsp.json
-```
-
-and turn `rsp.json` into whatever your CI shows. With `--format markdown` (the default) the output can be posted as a merge request comment as is.
-
-## Output
-
-The Markdown report is the comment shown above. The JSON report, from `--format json` or the `report` output of the Action, has this shape:
-
-```json
-{
-  "base": "0d21a9495c6e4b1a528fe417fd596b776e82a471",
-  "config": null,
-  "findings": [
-    {
-      "evidence": "@pytest.mark.skip(reason=\"flaky\")",
-      "fingerprint": "694ef6356a2d3ab2",
-      "key": "pytest-skip",
-      "locations": [{ "line": 6, "path": "tests/test_auth.py" }],
-      "message": "Added pytest skip marker",
-      "reproduce": "rsp check --base 0d21a94... --head 1d2dc83... --rule checks/disabled",
-      "ruleId": "checks/disabled",
-      "ruleVersion": "0.4.0"
-    }
-  ],
-  "head": "1d2dc83171117d1cd416497dbf8f687b2dd6b1f6",
-  "options": [],
-  "rules": [{ "id": "checks/disabled", "version": "0.4.0" }],
-  "tool": { "name": "rsp", "version": "0.5.0" }
-}
-```
-
-- `fingerprint` identifies a finding across pushes: it is built from the rule, the file and the evidence, not from line numbers, so it stays the same when unrelated lines move. Use it to track findings over time.
-- `reproduce` is the full command, including any options that affected the result (`--exclude`, `--no-config`, JUnit and coverage reports).
-- `tests` is present when JUnit reports were given: `flaky` lists tests that failed and also passed at head, and `incomplete` lists head reports that were cut off. They describe the test run, not the diff, so they are not findings.
-- Keys and objects are sorted, and findings are sorted by rule, path and line, so two runs on the same commits give the same bytes.
-
-## GitHub Action reference
+### Action inputs
 
 | Input | Default | Meaning |
 | --- | --- | --- |
 | `fail-on` | `never` | `any` fails the step when there is at least one finding. |
-| `exclude` | | Globs of changed files to ignore, one per line or comma separated, e.g. `tests/fixtures/**`. Added to the `exclude` of `.rsp.toml`. |
-| `rules` | all | Rule ids to run, one per line or comma separated. |
-| `test-command` | | Shell command that installs dependencies and runs the tests, writing JUnit XML. Enables `tests/delta`. |
-| `junit` | `**/junit*.xml` | Glob of the JUnit files the test command writes, relative to the repository root. |
-| `coverage` | empty | Glob of the LCOV or Cobertura reports the test command writes at head, for `tests/uncovered-change`. |
+| `exclude` | | Globs of changed files to ignore, added to the `exclude` of `.rsp.toml`. |
+| `rules` | all | Rule ids to run. |
+| `test-command` | | Command that installs dependencies and runs the tests, writing JUnit XML. Enables `tests/delta`. |
+| `junit` | `**/junit*.xml` | Glob of the JUnit files the test command writes. |
+| `coverage` | | Glob of the LCOV or Cobertura reports written at head. Enables `tests/uncovered-change`. |
 | `test-retries` | `1` | Extra runs at head while tests fail there but passed at base. |
 | `comment` | `true` | `false` writes only the job summary. |
 | `github-token` | `github.token` | Token used for the comment. Needs `pull-requests: write`. |
 
-| Output | Meaning |
-| --- | --- |
-| `findings` | Number of findings. |
-| `report` | Path of the JSON report. |
+The full [Action reference](docs/GUIDE.md#github-action-reference), [command line reference](docs/GUIDE.md#command-line-reference) and [JSON output format](docs/GUIDE.md#output) are in the user guide.
 
-The Action needs the full history of both commits: use `actions/checkout` with `fetch-depth: 0`. It runs on events that carry a pull request (`pull_request`, and `pull_request_target` without `test-command`) and skips other events with a notice.
+## Components
 
-## Command line reference
+RSP is one pure core with two thin front ends. The Action and the CLI produce the same findings on the same commits.
 
-```text
-Usage: rsp check --base <ref> [--head <ref>] [options]
-
-Options:
-  --base <ref>      Commit, branch or tag to compare against (required)
-  --head <ref>      Commit to check (default: HEAD)
-  --repo <dir>      Repository directory (default: current directory)
-  --format <fmt>    json or markdown (default: markdown)
-  --rule <id>       Run only this rule; repeatable
-  --exclude <glob>  Ignore changed files matching this glob; repeatable
-  --no-config       Ignore .rsp.toml in the base commit
-  --junit-base <f>  JUnit report of the tests run at base; repeatable
-  --junit-head <f>  JUnit report of the tests run at head; repeatable
-  --coverage <f>    LCOV or Cobertura coverage report of the tests at head; repeatable
-  --list-rules      Print the available rules and exit
-  --version         Print the version and exit
-  --help            Print this help and exit
+```mermaid
+flowchart LR
+    A["Two commits<br/>base and head"] --> B["Core<br/>git · diff · context"]
+    C[".rsp.toml<br/>from the base commit"] --> B
+    D["JUnit and coverage<br/>reports (optional)"] --> B
+    B --> E["Rules<br/>9 pure functions"]
+    E --> F["Sorted findings<br/>with fingerprints"]
+    F --> G["Markdown report"]
+    F --> H["JSON report"]
+    G --> I["GitHub Action<br/>PR comment · job summary · annotations"]
+    H --> J["CLI<br/>rsp check"]
 ```
 
-The base is resolved to its merge-base with the head, exactly as GitHub computes the diff of a pull request. Findings never change the exit code: 0 means RSP ran, 2 a usage or configuration error.
+| Component | Where | Role |
+| --- | --- | --- |
+| Core | [`src/engine.ts`](src/engine.ts), [`src/context.ts`](src/context.ts), [`src/git.ts`](src/git.ts), [`src/diff.ts`](src/diff.ts) | Turns two commits into a diff context, then into sorted findings |
+| Rules | [`src/rules/`](src/rules) | One file per rule; Python, JavaScript/TypeScript and Go helpers |
+| Reports | [`src/report/`](src/report) | Markdown and JSON output, with every piece of diff text escaped |
+| GitHub Action | [`action.yml`](action.yml), [`src/action.ts`](src/action.ts), [`action-dist/`](action-dist) | Sticky PR comment, job summary, annotations, test runs in worktrees |
+| CLI | [`src/cli.ts`](src/cli.ts) | `rsp check` for local runs, agents and other CI systems |
+| Evaluation | [`eval/`](eval) | Labelled mutations, real project history and SWE-bench Lite |
+
+Built with TypeScript on Node 22 or later, as ESM, with [`smol-toml`](https://github.com/squirrelchat/smol-toml) as the only runtime dependency.
 
 ## How RSP is validated
 
-Passing its own tests proves that RSP is consistent, not that its rules work on real code. Every rule change goes through four layers, and a fifth evaluation measures RSP on patches written by coding agents.
+Passing its own tests proves that RSP is consistent, not that its rules work on real code. Every rule change goes through four layers:
 
-1. **Golden fixtures** (`test/fixtures/<rule>/<case>/`). Each case is a `base/` tree, a `head/` tree, optional JUnit reports in `reports/`, and an `expected.json` written by hand before running the rule. The harness builds a throwaway git repository per case with fixed authors and dates, and runs **every** rule on **every** case, so a rule that fires on another rule's fixture fails too.
-2. **Labelled mutations** (`npm run eval`). Risky and benign changes are applied to each corpus; each risky change must be reported by exactly the expected rules and each benign one by none. CI fails if the results change.
-   - A small sample Python project: [eval/RESULTS.md](eval/RESULTS.md).
-   - A small TypeScript web service: [eval/RESULTS_JS.md](eval/RESULTS_JS.md).
-   - A small Go service: [eval/RESULTS_GO.md](eval/RESULTS_GO.md).
-   - Corpora built on real applications whose code should not be copied here are kept outside the repository and loaded with `RSP_EVAL_EXTRA=<file>` (see `eval/run.ts`). Their results are not part of CI.
-3. **Real history** (`eval/real-history.ts`). Every rule runs on about 100 recent commits of public projects, and each line-level finding is checked against git independently of the rules: the reported line holds the evidence, the line occurs more often after the commit than before, and for signatures the definition really changed. Python: flask, requests, httpx, fastapi, click ([eval/REAL_HISTORY.md](eval/REAL_HISTORY.md)). JavaScript/TypeScript: express, axios, fastify, vite, outline ([eval/REAL_HISTORY_JS.md](eval/REAL_HISTORY_JS.md)). Go: cobra, gin, chi, testify, viper ([eval/REAL_HISTORY_GO.md](eval/REAL_HISTORY_GO.md)). Every false fact found this way was fixed and became a golden fixture.
-4. **Action tests** against a fake GitHub API: comment created, updated and cleared, read-only tokens, `fail-on`, invalid configuration, the test command at base and head with a flaky rerun, and one run from the committed bundle. On every pull request of RSP itself, an end-to-end job also runs the Action from `action.yml` on a real runner, compares its report with the CLI on the same commits and checks that the test command saw no tokens.
+1. **Golden fixtures.** Hand-written expectations, and every rule runs on every case.
+2. **Labelled mutations.** Risky and benign changes on sample Python, TypeScript and Go projects; CI fails if the results change.
+3. **Real history.** About 100 recent commits of public projects per ecosystem (flask, fastapi, express, vite, gin, cobra and more), each finding checked against git independently of the rules.
+4. **Action tests** against a fake GitHub API, plus an end-to-end run of the Action on RSP's own pull requests.
 
-### Patches written by coding agents
-
-`eval/swe-bench.ts` runs RSP on the 300 tasks of [SWE-bench Lite](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite), real issues of 12 Python projects. For each task it checks the pull request that fixed the issue and the patches written by three agents from public leaderboard submissions (SWE-agent with Claude 4 Sonnet, Agentless Lite with o3-mini, Moatless Tools with DeepSeek V3). The full report is [eval/SWE_BENCH.md](eval/SWE_BENCH.md).
-
-| Patches by | Patches | With findings | Resolved, with findings | Not resolved, with findings |
-| --- | --- | --- | --- | --- |
-| Human fix (code and test patch) | 300 | 10 (3%) | | |
-| SWE-agent + Claude 4 Sonnet | 300 | 11 (4%) | 4 of 170 | 7 of 130 |
-| Agentless Lite + o3-mini | 294 | 4 (1%) | 2 of 97 | 2 of 197 |
-| Moatless Tools + DeepSeek V3 | 287 | 0 | 0 of 92 | 0 of 195 |
-
-What this shows, and what it does not:
-
-- **Findings are rare, as intended.** SWE-bench tasks are small bug fixes, and RSP only speaks when one of its specific facts is true. On the human fixes, every finding is a deliberate skip marker or a test that lost assertions while being rewritten.
-- **The agent findings are the shortcuts RSP is for.** One agent patch deletes the project's whole test file (`test_requests.py`); others add `# type: ignore`, or add parameters to public functions without touching a test. Of the 11 SWE-agent findings, 7 are on patches that did not resolve their task.
-- **The first run found false facts, now fixed.** Skip markers and imports inside Python strings (pytest's own tests write test code into strings), dependency lists built in `setup.py` variables or imported from another module, `pytest` imported by test files of projects that declare it in tox or conda files, a method defined twice in one class, and a backslash at the end of a docstring line that shifted line numbers. Each became a golden fixture.
-- **It is not a detector of wrong patches.** Most unresolved patches have no finding, because most wrong patches are wrong in ways only tests or a reviewer can see. `tests/delta` with the task's tests would see more, and is not part of this run.
+On top of that, RSP runs on the 300 tasks of [SWE-bench Lite](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite), on the human fixes and on the patches of three coding agents. Findings are rare, as intended, and the agent findings are exactly the shortcuts RSP is for, such as a patch that deletes a project's whole test file. Details and numbers are in [docs/VALIDATION.md](docs/VALIDATION.md).
 
 ## Security
 
-RSP reads untrusted input, the pull request, and writes to it, so it is built to give that input as little as possible.
+RSP reads untrusted input, the pull request, and writes back to it, so it gives that input as little as possible:
 
-- **Least privilege.** The Action needs `contents: read`, plus `pull-requests: write` only for the comment; with `comment: false` it needs no write permission at all. Declare permissions per job and set `permissions: {}` at the top of the workflow.
-- **Text from the diff is inert.** File names, package names, test ids and code quoted in the comment are rendered as code spans or escaped text, so a pull request cannot inject links, images, HTML or @mentions into the report. Annotations and log lines escape workflow command syntax.
-- **Its own comment only.** RSP updates only a comment written by a bot that starts with its marker; a marker pasted by someone else is ignored.
-- **Pull request code runs only when you ask.** Without `test-command`, RSP never executes code from the repository; it reads git objects. With it, see [In the GitHub Action](#in-the-github-action): no tokens in the environment, no step files, workflow commands off, refused on `pull_request_target`, symbolic links ignored when collecting reports.
-- **No network in the rules.** Only the comment step talks to the GitHub API, with the token you give it.
-- **Supply chain.** The Action is a single bundled file (`action-dist/index.js`) that CI rebuilds and compares on every change, with one runtime dependency (`smol-toml`). Pin the Action by commit SHA. The repository's own workflows pin every action by SHA, run with read-only permissions by default, verify npm registry signatures and are scanned by CodeQL; Dependabot keeps them current.
+- the Action needs `contents: read`, plus `pull-requests: write` only for the comment;
+- file names, package names and code quoted in the report are rendered inert, so a pull request cannot inject links, HTML or mentions;
+- without `test-command`, RSP never executes repository code, and with it the command runs without tokens, step files or workflow commands, and never on `pull_request_target`;
+- rules use no network.
 
-Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+Read the [security section of the user guide](docs/GUIDE.md#security) for the details, and report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## Limitations
 
 - **RSP is not a reviewer.** No findings does not mean a change is correct, only that none of these specific things happened.
 - **Bounded on purpose.** Rules use line-level parsing tuned for precision, not full parsers. Unusual syntax is more likely to be missed than misreported.
-- **Three ecosystems.** Python, JavaScript/TypeScript and Go. For Go, the interface rules (`interface/*`) do not run yet. `deps/lockfile` checks that the lockfile records what the manifest declares, not that the locked versions satisfy the ranges. CI checks cover GitHub Actions workflows.
-- **Interface changes are about what callers write.** Parameters, TypeScript type fields, return annotations, imported names and literal routes are compared; behaviour, Python class attributes and routes built at run time are not, and "a test mentions it" is a name match, not coverage. Coverage is read only when you give a report.
-- **Test delta costs a second test run** and is only as good as the JUnit report: tests that the runner does not report, such as doctests in some setups, are not seen.
+- **Three ecosystems.** Python, JavaScript/TypeScript and Go. The interface rules do not run on Go yet. CI checks cover GitHub Actions workflows.
+- **Interfaces are about what callers write.** Behaviour, Python class attributes and routes built at run time are not compared, and "a test mentions it" is a name match, not coverage.
+- **Test delta costs a second test run**, and it is only as good as the JUnit report.
 
 ## FAQ
 
-**Why not use an LLM to review the diff?**
-Because a model's review is an opinion, and it can be confidently wrong in exactly the cases RSP is for. RSP's findings can be checked by anyone in seconds and come out the same on every run. The two are complementary: RSP is cheap enough to run on every push and leaves a model, or a person, free to judge the rest.
+<details>
+<summary><b>Why not use an LLM to review the diff?</b></summary>
 
-**Will RSP complain about the existing `# type: ignore` all over my code?**
+A model's review is an opinion, and it can be confidently wrong in exactly the cases RSP is for. RSP's findings can be checked by anyone in seconds and come out the same on every run. The two are complementary: RSP is cheap enough to run on every push and leaves a model, or a person, free to judge the rest.
+</details>
+
+<details>
+<summary><b>Will RSP complain about the existing <code># type: ignore</code> all over my code?</b></summary>
+
 No. Only lines added or changed by the pull request are looked at.
+</details>
 
-**A finding is correct but we do this on purpose. What now?**
-Add its key to `allow` for that rule in `.rsp.toml`, or exclude the files where it is expected. The comment shows the key-relevant evidence, and `rsp --list-rules` lists the keys.
+<details>
+<summary><b>A finding is correct, but we do this on purpose. What now?</b></summary>
 
-**Why is the configuration read from the base commit?**
-So that a pull request cannot switch off the checks that apply to it. Changing `.rsp.toml` is itself a reviewed change.
+Add its key to `allow` for that rule in `.rsp.toml`, or exclude the files where it is expected. `rsp --list-rules` lists the keys.
+</details>
 
-**Does RSP send my code anywhere?**
+<details>
+<summary><b>Does RSP send my code anywhere?</b></summary>
+
 No. The rules run locally on the git objects of the repository and use no network. The Action talks only to the GitHub API, to write the comment.
+</details>
 
-**Does it work with squash merges, rebases and stacked pull requests?**
-RSP compares the head with its merge-base with the base, like GitHub's own pull request diff, so it reports the same changes the pull request shows.
+<details>
+<summary><b>Does it work with squash merges, rebases and stacked pull requests?</b></summary>
 
-**How do I see everything without my configuration?**
-`rsp check --base origin/main --no-config`.
+Yes. RSP compares the head with its merge-base with the base, like GitHub's own pull request diff, so it reports the same changes the pull request shows.
+</details>
 
-**Why "facts" and not "warnings"?**
+<details>
+<summary><b>Why "facts" and not "warnings"?</b></summary>
+
 A warning implies the change is wrong. "Added pytest skip marker" is simply true, and whether that is acceptable depends on context only the team has.
+</details>
 
-## Development
+## Contributing
+
+Issues and pull requests are welcome. If RSP ever reports something that is not true, that is a bug: please [open an issue](https://github.com/fedeveloper/rsp/issues) with the two commits.
 
 ```sh
 npm ci
 npm run typecheck
 npm test
-npm run eval      # labelled mutations on eval/project, eval/project-js and eval/project-go; RSP_EVAL_EXTRA=<file> adds a corpus kept outside the repository
+npm run eval      # labelled mutations on the sample Python, TypeScript and Go projects
 npm run bundle    # rebuild action-dist/ after changing src/; CI checks it is up to date
-node --import tsx eval/real-history.ts --commits 100 --out eval/REAL_HISTORY.md <repo-dirs>
-node --import tsx eval/swe-bench.ts
 ```
 
-TypeScript on Node 22 or later, ESM, with `smol-toml` as the only runtime dependency. The core (`src/engine.ts`, `src/context.ts`, `src/git.ts`, `src/diff.ts`) turns two commits into a diff context and sorted findings; each rule in `src/rules/` is a pure function of that context. The Action (`src/action.ts`) and the CLI (`src/cli.ts`) are thin wrappers around the same core. [CLAUDE.md](CLAUDE.md) records why things are built the way they are and how changes are expected to be validated.
-
-Releases are git tags `vX.Y.Z` on `main`; the version lives in `package.json` and `src/version.ts`, and a test keeps them in sync with [CHANGELOG.md](CHANGELOG.md). Pushing the tag runs `.github/workflows/release.yml`, which creates the GitHub Release from the CHANGELOG section and moves the major tag `v0` to the same commit. [docs/WRITING-RULES.md](docs/WRITING-RULES.md) explains how to write a rule and validate it.
+- [docs/WRITING-RULES.md](docs/WRITING-RULES.md) explains how to write a rule and validate it.
+- [CLAUDE.md](CLAUDE.md) records why RSP is built this way and how changes are validated.
+- Releases are git tags `vX.Y.Z` on `main`. The release workflow creates the GitHub Release from [CHANGELOG.md](CHANGELOG.md) and moves the major tag `v0`.
 
 ## License
 
-[Apache-2.0](LICENSE)
+RSP is licensed under the [Apache License 2.0](LICENSE).
+
+The Action bundles one runtime dependency, `smol-toml` (BSD-3-Clause); its license is in [`action-dist/THIRD_PARTY_NOTICES`](action-dist/THIRD_PARTY_NOTICES).
+
+<div align="center">
+<sub>RSP: Reproducible Shortcut Patrol · facts, not opinions</sub>
+</div>

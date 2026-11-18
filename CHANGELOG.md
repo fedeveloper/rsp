@@ -6,6 +6,10 @@ The section of a version is the body of its GitHub Release.
 
 ## [Unreleased]
 
+### Changed
+
+- The README is now a landing page with badges, a quick start and an overview of rules and components. The full reference moved to `docs/RULES.md`, `docs/GUIDE.md` and `docs/VALIDATION.md`.
+
 ## [0.5.0] - 2026-10-31
 
 Go joins Python and JavaScript/TypeScript, two rules read interfaces that other files still use, and the test delta tells flaky tests and coverage of the added lines apart. Rules whose version changed can report different findings on the same commits.

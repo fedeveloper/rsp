@@ -136,6 +136,6 @@ When a rule changes, rerun `eval/swe-bench.ts` and read the new findings. It is 
 - [ ] Golden fixtures for every new behaviour, positive and negative, written by hand.
 - [ ] Mutations added and `npm run eval` regenerated.
 - [ ] Real history run and every finding read.
-- [ ] README: the rule's section and Limitations.
+- [ ] Docs: the rule's section in `docs/RULES.md`; its row in the README rules table and Limitations.
 - [ ] CHANGELOG: an entry under Unreleased.
 - [ ] `npm run typecheck`, `npm test` and `npm run bundle`, with `action-dist/` committed.

@@ -41,6 +41,7 @@ The name is **RSP: Reproducible Shortcut Patrol** (chosen 2026-10-21). The comma
 - `src/report/`: JSON and Markdown output. `src/action.ts`: the GitHub Action (sticky PR comment, job summary, annotations).
 - `test/fixtures/<rule>/<case>/`: golden cases, each with `base/`, `head/` and a hand-written `expected.json`.
 - `eval/`: evaluation corpora and reports (see below).
+- `README.md` is the public landing page; the full reference lives in `docs/RULES.md` (every rule and key), `docs/GUIDE.md` (configuration, test delta, coverage, integration, output, Action and CLI reference, security) and `docs/VALIDATION.md`.
 - `docs/WRITING-RULES.md`: how to write and validate a rule, with an example rule that `test/docs-example.test.ts` runs.
 - `CHANGELOG.md`: every release, with rule versions and fixed false facts. Add an entry under Unreleased with each change.
 
