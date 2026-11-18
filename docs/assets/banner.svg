@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-labelledby="t d">
+  <title id="t">RSP: Reproducible Shortcut Patrol</title>
+  <desc id="d">Reproducible facts about the shortcuts in a pull request.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1f3a"/>
+      <stop offset="1" stop-color="#123a6b"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4da3ff"/>
+      <stop offset="1" stop-color="#1f6feb"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="320" rx="24" fill="url(#bg)"/>
+  <g fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1">
+    <path d="M0 80H1280M0 160H1280M0 240H1280M160 0V320M320 0V320M480 0V320M640 0V320M800 0V320M960 0V320M1120 0V320"/>
+  </g>
+  <g transform="translate(120 70)">
+    <path d="M90 0 L180 32 V96 C180 150 140 172 90 190 C40 172 0 150 0 96 V32 Z" fill="url(#shield)"/>
+    <path d="M50 96 L80 126 L134 70" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" fill="#ffffff">
+    <text x="360" y="150" font-size="96" font-weight="800" letter-spacing="4">RSP</text>
+    <text x="364" y="200" font-size="34" font-weight="600" fill-opacity="0.92">Reproducible Shortcut Patrol</text>
+    <text x="364" y="248" font-size="22" fill="#9ecbff">Facts, not opinions, about the shortcuts in a pull request.</text>
+  </g>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" fill="#9ecbff" fill-opacity="0.55">
+    <text x="1160" y="56" text-anchor="end">$ rsp check --base origin/main</text>
+  </g>
+</svg>
